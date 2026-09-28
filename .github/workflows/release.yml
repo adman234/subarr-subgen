@@ -133,6 +133,10 @@ jobs:
           mkdir -p build/
           cp -a upstream/. build/
           rm -rf build/.git
+          # [#73] Stage our constraints file too. It is not part of the upstream
+          # tree, and the Dockerfile's COPY of it fails the build if it is absent -
+          # which is deliberately how a forgotten staging site surfaces.
+          cp docker/constraints.txt build/
 
       # [#63] Daily value for the Dockerfile's APT_REFRESH, so the security
       # upgrade layer is rebuilt at least once a day even with a warm cache.

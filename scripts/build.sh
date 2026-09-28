@@ -19,6 +19,9 @@ echo "==> staging build context"
 rm -rf build/
 mkdir -p build/
 cp -a upstream/. build/
+# [#73] Our constraints file is NOT part of the upstream tree, so it has to be
+# staged alongside it or the Dockerfile's COPY fails the build.
+cp docker/constraints.txt build/
 # Strip submodule's .git so it doesn't bloat the image build.
 rm -rf build/.git
 

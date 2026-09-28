@@ -71,9 +71,26 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # App dependencies — only rebuilds when requirements.txt changes. Upstream's
 # requirements do not list torch, and pip's default only-if-needed strategy
 # leaves the pinned torch alone.
-COPY requirements.txt /
+#
+# [#73] CONSTRAINED. Upstream's requirements.txt is nine bare names with no
+# versions, so this layer used to resolve against whatever PyPI held that day.
+# On 2026-09-24 the index moved and pip's resolvelib graph weighting began
+# crashing on the result — `assert len(weights) == expected_node_count`, after
+# every download had finished — so every UNCACHED build failed. pr.yml and
+# security.yml went red, meaning trivy scanned nothing for two days, while
+# release.yml stayed green purely on a registry cache hit for this layer. A
+# release path that only works while a cache is warm fails exactly when you
+# want to cut a release.
+#
+# constraints.txt is read out of a published, verified image rather than a fresh
+# resolve (scripts/gen-constraints.sh), so what is pinned is what has actually
+# run. ⚠ The COPY below is load-bearing as a GUARD: the context is staged in
+# two places (scripts/build.sh and release.yml's inline stage step), and a COPY
+# of a missing file is a hard build failure — so a staging site that forgets
+# constraints.txt cannot quietly go back to building unpinned.
+COPY requirements.txt constraints.txt /
 RUN --mount=type=cache,target=/root/.cache/pip \
-    python3 -m pip install -U -r /requirements.txt
+    python3 -m pip install -U -r /requirements.txt -c /constraints.txt
 
 # [#27] Refuse to build with a torch pair that cannot run subgen. pip does not
 # catch a CUDA-build mismatch, and the requirements step above could in
