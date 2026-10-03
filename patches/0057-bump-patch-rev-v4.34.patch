@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: subarr-subgen <subarr@localhost>
+Date: Sat, 03 Oct 2026 12:30:00 +1000
+Subject: [PATCH] 0057: bump patch rev to v4.34
+
+Security rebuild, no code change. Identical patch stack and upstream pin to
+v4.33; the only difference is that the image is rebuilt, so the Dockerfile's
+`apt-get upgrade -y` picks up the outstanding jammy-security packages.
+
+Cut in response to #76, where the `image-staleness` job found the published
+`2026.08.1-r13` (built 2026-09-26) carrying packages from a security pocket.
+Re-measured against the published image on 2026-10-03 rather than trusting
+the issue, per the v4.33 note: `openssl` and `libssl3` 3.0.2-0ubuntu1.29 ->
+.30, and those two were the ONLY upgradable packages left, where the issue
+had recorded 6 upgradable on 2026-10-01. The count moved in the opposite
+direction to v4.33's (3 -> 5), which is the same lesson either way: the
+issue's list is a snapshot, not the state at cut time.
+
+The rev still moves. Capabilities and behaviour are unchanged, but an install
+has to be identifiable: without a bump, two images with different packages
+would both report v4.33 and neither subarr nor a bug report could tell them
+apart. Same reasoning as v4.20, v4.25 and v4.33.
+---
+diff --git a/subgen.py b/subgen.py
+--- a/subgen.py
++++ b/subgen.py
+@@ -2,7 +2,7 @@ subgen_version = '2026.08.1'
+ # [v4.3 PATCH] subarr-subgen patch-stack revision, surfaced via /queue so subarr
+ # can detect our extended capabilities (audio_language_override, etc.) and
+ # degrade gracefully against vanilla mccloud/subgen which lacks them.
+-subarr_subgen_patch_rev = 'v4.33'
++subarr_subgen_patch_rev = 'v4.34'
+ 
+ """
+ ENVIRONMENT VARIABLES DOCUMENTATION
+--
+2.43.0
