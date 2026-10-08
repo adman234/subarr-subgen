@@ -21,7 +21,7 @@ CPU pinning: set it below. Parakeet uses one thread per pinned CPU unless PARAKE
   <Category>MediaApp:Video Tools:</Category>
   <WebUI/>
   <TemplateURL>https://raw.githubusercontent.com/adman234/subarr-subgen/main/unraid/subarr-subgen-parakeet.xml</TemplateURL>
-  <Icon>https://raw.githubusercontent.com/McCloudS/subgen/main/icon.png</Icon>
+  <Icon>https://raw.githubusercontent.com/adman234/subarr-subgen/main/unraid/icon.png</Icon>
   <ExtraParams/>
   <PostArgs/>
   <CPUset/>
