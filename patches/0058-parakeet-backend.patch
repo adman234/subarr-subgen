@@ -1,0 +1,561 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: adman234 fork <noreply@github.com>
+Date: Thu, 08 Oct 2026 12:00:00 +0000
+Subject: [PATCH] 0058: Parakeet (onnx-asr, CPU) transcription backend
+
+TRANSCRIBE_BACKEND=parakeet transcribes with NVIDIA Parakeet TDT through
+onnx-asr on the CPU (no VRAM). The language the caller supplies (Bazarr's
+?language=, media metadata) is always used; WHISPER_MODEL only detects a
+missing language and handles languages Parakeet cannot. Both models unload
+with the existing CLEAR_VRAM_ON_COMPLETE / MODEL_CLEANUP_DELAY cleanup.
+Also makes patch 0002's startup model load opt-in (EAGER_MODEL_LOAD).
+
+diff --git a/parakeet_backend.py b/parakeet_backend.py
+new file mode 100644
+index 0000000..9327999
+--- /dev/null
++++ b/parakeet_backend.py
+@@ -0,0 +1,384 @@
++"""Parakeet (onnx-asr) transcription backend for subgen.
++
++Selected with TRANSCRIBE_BACKEND=parakeet. Transcription runs NVIDIA Parakeet
++TDT (default nemo-parakeet-tdt-0.6b-v3, int8) on the CPU through onnx-asr and
++ONNX Runtime, so it uses no VRAM.
++
++ParakeetHybridModel stands in for the stable-ts/faster-whisper model object
++that subgen keeps in its global ``model``:
++
++* ``transcribe()`` returns a stable_whisper ``WhisperResult``, so subgen's
++  regrouping, SRT/VTT/LRC writers and offset handling work unchanged.
++* The language subgen passes in (Bazarr's ``language`` param, Plex/Jellyfin
++  metadata, ...) is always used when present. Only when it is missing does a
++  small Whisper model (WHISPER_MODEL) detect it.
++* Languages Parakeet cannot transcribe, and ``task=translate``, fall back to
++  that Whisper model (PARAKEET_FALLBACK=whisper) or fail (PARAKEET_FALLBACK=none).
++* ``model.model.unload_model()`` frees both models, so CLEAR_VRAM_ON_COMPLETE
++  and MODEL_CLEANUP_DELAY unload them from RAM when subgen is idle.
++"""
++
++from __future__ import annotations
++
++import gc
++import logging
++import math
++import os
++import shutil
++import subprocess
++import threading
++from dataclasses import dataclass
++from typing import Callable
++
++import numpy as np
++
++SAMPLE_RATE = 16000
++
++# Parakeet TDT 0.6B v3: the 25 European languages it was trained on.
++PARAKEET_V3_LANGUAGES = frozenset({
++    "bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "hu", "it",
++    "lv", "lt", "mt", "pl", "pt", "ro", "sk", "sl", "es", "sv", "ru", "uk",
++})
++PARAKEET_V2_LANGUAGES = frozenset({"en"})
++
++# A word's end is the next word's start, capped so a pause after the last word
++# of a sentence does not stretch that word across the silence.
++_MAX_WORD_DURATION_S = 1.5
++_MIN_WORD_DURATION_S = 0.05
++_COMPLETE_MARKER = ".subgen-complete"
++
++
++@dataclass
++class DetectionResult:
++    """Minimal stand-in for a WhisperResult when only the language is needed."""
++
++    language: str | None
++    language_probability: float | None = None
++
++
++def _normalize_language(language) -> str | None:
++    if language is None:
++        return None
++    code = str(language).strip().lower().replace("_", "-").split("-")[0]
++    if not code or code in ("none", "und", "unknown"):
++        return None
++    return code
++
++
++def _default_threads() -> int:
++    try:
++        return max(1, len(os.sched_getaffinity(0)))
++    except (AttributeError, OSError):
++        return max(1, os.cpu_count() or 1)
++
++
++def supported_languages(model_name: str) -> frozenset[str]:
++    """Languages the configured Parakeet model can transcribe."""
++    override = os.getenv("PARAKEET_LANGUAGES", "").strip()
++    if override:
++        return frozenset(_normalize_language(c) for c in override.replace("|", ",").split(",") if c.strip())
++    if "parakeet" in model_name and "v2" in model_name:
++        return PARAKEET_V2_LANGUAGES
++    return PARAKEET_V3_LANGUAGES
++
++
++def words_from_segment(seg_start: float, seg_end: float, tokens, timestamps, logprobs) -> list[dict]:
++    """Group onnx-asr subword tokens into stable-ts word dicts.
++
++    onnx-asr turns the SentencePiece word marker into a leading space, so a
++    token starting with a space begins a new word. Token timestamps are
++    relative to the VAD segment.
++    """
++    tokens = tokens or []
++    timestamps = timestamps or []
++    logprobs = logprobs or []
++    grouped: list[dict] = []
++    for i, (tok, ts) in enumerate(zip(tokens, timestamps)):
++        lp = logprobs[i] if i < len(logprobs) else 0.0
++        if not grouped or tok.startswith(" "):
++            grouped.append({"text": tok, "start": float(ts), "logprobs": [lp]})
++        else:
++            grouped[-1]["text"] += tok
++            grouped[-1]["logprobs"].append(lp)
++
++    words = []
++    for j, g in enumerate(grouped):
++        text = g["text"]
++        if not text.strip():
++            continue
++        if not text.startswith(" "):
++            text = " " + text
++        start = seg_start + g["start"]
++        next_start = seg_start + grouped[j + 1]["start"] if j + 1 < len(grouped) else seg_end
++        end = min(next_start, start + _MAX_WORD_DURATION_S, seg_end)
++        end = max(end, start + _MIN_WORD_DURATION_S)
++        prob = float(np.exp(np.mean(g["logprobs"]))) if g["logprobs"] else 1.0
++        words.append({
++            "word": text,
++            "start": round(start, 3),
++            "end": round(end, 3),
++            "probability": min(max(prob, 0.0), 1.0),
++        })
++    return words
++
++
++def to_waveform(audio, input_sr: int | None = None) -> np.ndarray:
++    """Turn any audio form subgen passes to model.transcribe() into float32 16 kHz mono."""
++    if isinstance(audio, np.ndarray):
++        wave = audio
++        if wave.dtype == np.int16:
++            wave = wave.astype(np.float32) / 32768.0
++        wave = wave.astype(np.float32, copy=False)
++        if wave.ndim > 1:
++            wave = wave.mean(axis=-1 if wave.shape[-1] <= 8 else 0)
++        if input_sr and input_sr != SAMPLE_RATE:
++            new_len = int(round(len(wave) * SAMPLE_RATE / input_sr))
++            wave = np.interp(np.linspace(0, len(wave), new_len, endpoint=False),
++                             np.arange(len(wave)), wave).astype(np.float32)
++        return wave
++
++    if isinstance(audio, (str, os.PathLike)):
++        return _ffmpeg_decode(str(audio), None)
++    if isinstance(audio, (bytes, bytearray, memoryview)):
++        data = bytes(audio)
++        try:
++            return _ffmpeg_decode("pipe:0", data)
++        except RuntimeError:
++            if input_sr:
++                # Headerless s16le PCM (e.g. Bazarr's encode=false upload).
++                return to_waveform(np.frombuffer(data[: len(data) // 2 * 2], np.int16), input_sr)
++            raise
++    raise TypeError(f"Unsupported audio input type: {type(audio).__name__}")
++
++
++def _ffmpeg_decode(source: str, data: bytes | None) -> np.ndarray:
++    """Decode any audio/video ffmpeg understands to float32 16 kHz mono."""
++    cmd = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-i", source,
++           "-vn", "-sn", "-dn", "-f", "s16le", "-acodec", "pcm_s16le", "-ac", "1", "-ar", str(SAMPLE_RATE), "pipe:1"]
++    proc = subprocess.run(cmd, input=data, capture_output=True, check=False)
++    if proc.returncode != 0 or not proc.stdout:
++        raise RuntimeError(f"ffmpeg could not decode audio: {proc.stderr.decode(errors='replace').strip()[-300:]}")
++    return np.frombuffer(proc.stdout, np.int16).astype(np.float32) / 32768.0
++
++
++class ParakeetHybridModel:
++    """Parakeet for transcription; a small Whisper model for detection and fallback."""
++
++    def __init__(
++        self,
++        *,
++        whisper_loader: Callable[[], object],
++        model_root: str,
++        model_name: str | None = None,
++        quantization: str | None = None,
++        threads: int | None = None,
++        fallback: str | None = None,
++        detect_seconds: int = 30,
++        detect_offset: int = 0,
++        max_segment_s: float | None = None,
++    ):
++        self._whisper_loader = whisper_loader
++        self.model_root = model_root
++        self.model_name = model_name or os.getenv("PARAKEET_MODEL", "nemo-parakeet-tdt-0.6b-v3")
++        quant = quantization if quantization is not None else os.getenv("PARAKEET_QUANTIZATION", "int8")
++        self.quantization = None if str(quant).strip().lower() in ("", "none", "fp32") else str(quant).strip().lower()
++        env_threads = int(os.getenv("PARAKEET_THREADS", "0") or 0)
++        self.threads = threads or env_threads or _default_threads()
++        self.fallback = (fallback or os.getenv("PARAKEET_FALLBACK", "whisper")).strip().lower()
++        self.detect_seconds = max(1, int(detect_seconds))
++        self.detect_offset = max(0, int(detect_offset))
++        self.max_segment_s = float(max_segment_s or os.getenv("PARAKEET_MAX_SEGMENT_S", "20"))
++        self.languages = supported_languages(self.model_name)
++
++        self._lock = threading.RLock()
++        self._asr = None
++        self._whisper = None
++        # subgen calls model.model.unload_model() on cleanup / config switch.
++        self.model = self
++
++    # ------------------------------------------------------------------ loading
++    def _session_options(self):
++        import onnxruntime as ort
++
++        so = ort.SessionOptions()
++        so.intra_op_num_threads = self.threads
++        so.inter_op_num_threads = 1
++        return so
++
++    def _local_dir(self, name: str) -> str:
++        suffix = f"-{self.quantization}" if self.quantization else ""
++        safe = name.replace("/", "--")
++        return os.path.join(self.model_root, "onnx-asr", f"{safe}{suffix}")
++
++    @staticmethod
++    def _load_into(target: str, load: Callable[[str], object]):
++        """Load a model from ``target``, downloading it there first if needed.
++
++        onnx-asr treats an existing directory as an offline model, so a download
++        cut short would otherwise never be retried. Downloads go to a
++        ``.partial`` directory that is only renamed once loading succeeded.
++        """
++        marker = os.path.join(target, _COMPLETE_MARKER)
++        if os.path.isfile(marker):
++            return load(target)
++        if os.path.isdir(target):
++            shutil.rmtree(target, ignore_errors=True)
++        partial = target + ".partial"
++        shutil.rmtree(partial, ignore_errors=True)
++        os.makedirs(os.path.dirname(target), exist_ok=True)
++        obj = load(partial)
++        os.replace(partial, target)
++        with open(marker, "w", encoding="utf-8") as f:
++            f.write("ok\n")
++        return obj
++
++    def _ensure_parakeet(self):
++        with self._lock:
++            if self._asr is not None:
++                return self._asr
++            import onnx_asr
++
++            providers = ["CPUExecutionProvider"]
++            logging.info(
++                f"Loading Parakeet model {self.model_name} (quantization={self.quantization or 'fp32'}, "
++                f"threads={self.threads}) from {self._local_dir(self.model_name)}"
++            )
++            asr = self._load_into(
++                self._local_dir(self.model_name),
++                lambda path: onnx_asr.load_model(
++                    self.model_name, path, quantization=self.quantization,
++                    sess_options=self._session_options(), providers=providers,
++                ),
++            )
++            vad = self._load_into(
++                os.path.join(self.model_root, "onnx-asr", "silero-vad"),
++                lambda path: onnx_asr.load_vad(
++                    "silero", path, sess_options=self._session_options(), providers=providers,
++                ),
++            )
++            self._asr = asr.with_vad(
++                vad,
++                max_speech_duration_s=self.max_segment_s,
++                min_silence_duration_ms=float(os.getenv("PARAKEET_VAD_MIN_SILENCE_MS", "300")),
++                speech_pad_ms=float(os.getenv("PARAKEET_VAD_SPEECH_PAD_MS", "100")),
++                threshold=float(os.getenv("PARAKEET_VAD_THRESHOLD", "0.5")),
++            ).with_timestamps()
++            logging.info("Parakeet model loaded")
++            return self._asr
++
++    def _ensure_whisper(self):
++        with self._lock:
++            if self._whisper is None:
++                logging.info("Loading Whisper model for language detection / fallback")
++                self._whisper = self._whisper_loader()
++            return self._whisper
++
++    def preload(self) -> None:
++        self._ensure_parakeet()
++
++    def unload_model(self) -> None:
++        with self._lock:
++            if self._whisper is not None:
++                try:
++                    self._whisper.model.unload_model()
++                except Exception as e:
++                    logging.debug(f"Whisper unload: {e}")
++            self._whisper = None
++            self._asr = None
++        gc.collect()
++        logging.info("Parakeet backend: models unloaded")
++
++    # ---------------------------------------------------------------- detection
++    def detect_language(self, *args, **kwargs):
++        """faster-whisper's detect_language (used by /detect_language_robust)."""
++        return self._ensure_whisper().detect_language(*args, **kwargs)
++
++    def _detect_wave(self, wave: np.ndarray, *, apply_window: bool) -> DetectionResult:
++        clip = wave
++        if apply_window:
++            start = self.detect_offset * SAMPLE_RATE
++            clip = wave[start:start + self.detect_seconds * SAMPLE_RATE]
++            if len(clip) == 0:
++                clip = wave[: self.detect_seconds * SAMPLE_RATE]
++        if len(clip) == 0:
++            return DetectionResult(None, None)
++        n_windows = max(1, min(10, math.ceil(len(clip) / SAMPLE_RATE / 30)))
++        whisper = self._ensure_whisper()
++        try:
++            language, prob, _ = whisper.detect_language(
++                audio=clip, vad_filter=True, language_detection_segments=n_windows,
++            )
++        except Exception as e:
++            # vad_filter can leave nothing on music-only clips; retry without it.
++            logging.debug(f"Language detection with VAD failed ({e}); retrying without VAD")
++            language, prob, _ = whisper.detect_language(audio=clip, language_detection_segments=n_windows)
++        logging.info(f"Whisper language detection: {language} (p={float(prob or 0):.2f}, {len(clip) / SAMPLE_RATE:.0f}s)")
++        return DetectionResult(language, float(prob or 0.0))
++
++    def detect_only(self, audio, input_sr: int | None = None) -> DetectionResult:
++        """Language of an already-trimmed clip (subgen's detect-language paths)."""
++        return self._detect_wave(to_waveform(audio, input_sr), apply_window=False)
++
++    # ------------------------------------------------------------ transcription
++    def transcribe(self, audio=None, *args, language=None, task="transcribe", input_sr=None,
++                   verbose=None, progress_callback=None, regroup=True, **kwargs):
++        if audio is None and args:
++            audio = args[0]
++        if audio is None:
++            audio = kwargs.pop("audio", None)
++        kwargs.pop("audio", None)
++        task = (task or "transcribe").lower()
++        lang = _normalize_language(language)
++
++        wave = to_waveform(audio, input_sr)
++
++        if not lang and task == "transcribe":
++            lang = _normalize_language(self._detect_wave(wave, apply_window=True).language)
++
++        if task == "transcribe" and lang in self.languages:
++            return self._transcribe_parakeet(wave, lang, progress_callback, regroup)
++
++        reason = "translation requested" if task != "transcribe" else f"language '{lang}' not supported by {self.model_name}"
++        if self.fallback != "whisper":
++            raise RuntimeError(f"Parakeet backend cannot handle this file: {reason} (PARAKEET_FALLBACK={self.fallback})")
++        logging.info(f"Parakeet: {reason}; falling back to Whisper")
++        whisper = self._ensure_whisper()
++        return whisper.transcribe(
++            wave, language=lang, task=task, input_sr=SAMPLE_RATE, verbose=verbose,
++            progress_callback=progress_callback, regroup=regroup, **kwargs,
++        )
++
++    def _transcribe_parakeet(self, wave: np.ndarray, lang: str, progress_callback, regroup):
++        from stable_whisper import WhisperResult
++
++        asr = self._ensure_parakeet()
++        total = len(wave) / SAMPLE_RATE
++        segments = []
++        for seg in asr.recognize(wave, sample_rate=SAMPLE_RATE):
++            text = (seg.text or "").strip()
++            if not text:
++                continue
++            words = words_from_segment(seg.start, seg.end, seg.tokens, seg.timestamps, seg.logprobs)
++            segment = {"start": round(seg.start, 3), "end": round(seg.end, 3), "text": " " + text}
++            if words:
++                segment["words"] = words
++                segment["start"] = words[0]["start"]
++                segment["end"] = max(words[-1]["end"], segment["start"])
++            segments.append(segment)
++            if progress_callback:
++                try:
++                    progress_callback(min(seg.end, total), total)
++                except Exception:
++                    pass
++
++        result = WhisperResult({"language": lang, "segments": segments})
++        has_words = bool(segments) and all("words" in s for s in segments)
++        if has_words and regroup:
++            result.regroup(regroup if isinstance(regroup, str) else True)
++        if progress_callback:
++            try:
++                progress_callback(total, total)
++            except Exception:
++                pass
++        logging.info(f"Parakeet transcription complete: {len(segments)} segments, {total:.0f}s audio, language={lang}")
++        return result
+diff --git a/requirements.txt b/requirements.txt
+index f771ae4..096a888 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -7,3 +7,4 @@ uvicorn
+ python-multipart
+ ffmpeg-python
+ watchdog
++onnx-asr[cpu,hub]
+diff --git a/subgen.py b/subgen.py
+index fb5bbf3..ba1e56d 100644
+--- a/subgen.py
++++ b/subgen.py
+@@ -159,6 +159,13 @@ custom_regroup = os.getenv('CUSTOM_REGROUP', 'cm_sl=84_sl=42++++++1')
+ detect_language_length = int(os.getenv('DETECT_LANGUAGE_LENGTH', 30))
+ detect_language_offset = int(os.getenv('DETECT_LANGUAGE_OFFSET', 0))
+ model_cleanup_delay = int(os.getenv('MODEL_CLEANUP_DELAY', 30))
++# [PATCH 0058 parakeet] TRANSCRIBE_BACKEND=parakeet transcribes with NVIDIA
++# Parakeet (onnx-asr, CPU). WHISPER_MODEL then only detects languages and
++# handles languages Parakeet can't. See parakeet_backend.py.
++transcribe_backend = os.getenv('TRANSCRIBE_BACKEND', 'whisper').strip().lower()
++# [PATCH 0058 parakeet] The startup model download/verify (patch 0002) is now
++# opt-in, so a restart leaves nothing loaded until the first job arrives.
++eager_model_load = convert_to_bool(os.getenv('EAGER_MODEL_LOAD', False))
+ asr_timeout = int(os.getenv('ASR_TIMEOUT', 18000))
+ webhook_url_completed = os.getenv('WEBHOOK_URL_COMPLETED', '')
+ 
+@@ -1961,7 +1968,7 @@ async def detect_language(
+             audio_data = await get_audio_chunk(audio_file, detect_lang_offset, detect_lang_length)
+ 
+         # Offload the heavy AI inference to a background thread
+-        result = await asyncio.to_thread(model.transcribe, audio_data, input_sr=16000, verbose=False)
++        result = await asyncio.to_thread(_detect_language_only, audio_data, 16000)
+         
+         detected = LanguageCode.from_string(result.language)
+         
+@@ -2039,7 +2046,10 @@ def detect_language_from_upload(task_data: dict) -> None:
+             pass
+         args['verbose'] = False # Hide the confusing progress bar
+         
+-        result = model.transcribe(**args)
++        if hasattr(model, 'detect_only'):  # [PATCH 0058 parakeet]
++            result = _detect_language_only(args['audio'], args.get('input_sr'))
++        else:
++            result = model.transcribe(**args)
+         detected_language = LanguageCode.from_string(result.language)
+         language_code = detected_language.to_iso_639_1()
+         
+@@ -2125,7 +2135,7 @@ def detect_language_task(path, original_task_data=None):
+         )
+         
+         # FIX: Hide confusing progress bar and use from_string for ISO codes
+-        result = model.transcribe(audio_segment, verbose=False)
++        result = _detect_language_only(audio_segment)  # [PATCH 0058 parakeet]
+         detected_language = LanguageCode.from_string(result.language)
+         
+         logging.info(f"Detected language: {detected_language.to_name()} [probability: {getattr(result, 'language_probability', None) or 'unknown'}]")
+@@ -2350,12 +2360,36 @@ def extract_audio_segment_to_memory(input_file, start_time, duration, track=None
+         logging.error(f"Error: {str(e)}")
+         return None
+ 
++def _load_whisper_model():
++    return stable_whisper.load_faster_whisper(whisper_model, download_root=model_location, device=transcribe_device, cpu_threads=whisper_threads, num_workers=concurrent_transcriptions, compute_type=compute_type)
++
+ def start_model():
+     global model
+     with model_load_lock:
+         if model is None:
+             logging.debug("Model was purged, need to re-create")
+-            model = stable_whisper.load_faster_whisper(whisper_model, download_root=model_location, device=transcribe_device, cpu_threads=whisper_threads, num_workers=concurrent_transcriptions, compute_type=compute_type)
++            if transcribe_backend == 'parakeet':
++                # [PATCH 0058 parakeet] Models inside load lazily: Parakeet on the
++                # first transcription, Whisper only if detection/fallback needs it.
++                from parakeet_backend import ParakeetHybridModel
++                model = ParakeetHybridModel(
++                    whisper_loader=_load_whisper_model,
++                    model_root=model_location,
++                    detect_seconds=detect_language_length,
++                    detect_offset=detect_language_offset,
++                )
++            else:
++                model = _load_whisper_model()
++
++def _detect_language_only(audio, input_sr=None):
++    """[PATCH 0058 parakeet] Language of an already-trimmed clip. The Parakeet
++    backend runs Whisper's language detector only, rather than transcribing the
++    whole DETECT_LANGUAGE_LENGTH window."""
++    if hasattr(model, 'detect_only'):
++        return model.detect_only(audio, input_sr=input_sr)
++    if input_sr is not None:
++        return model.transcribe(audio, input_sr=input_sr, verbose=False)
++    return model.transcribe(audio, verbose=False)
+ 
+ def schedule_model_cleanup():
+     """Schedule model cleanup with a delay to allow concurrent requests.
+@@ -3658,27 +3692,47 @@ def transcribe_existing(transcribe_folders, forceLanguage : LanguageCode | None
+ 
+ if __name__ == "__main__":
+     # [v4 PATCH] Eager model load on boot (ensures download/verify at startup)
+-    logging.info("--- [Startup] Eager model load check ---")
+-    try:
+-        from stable_whisper import load_faster_whisper
+-        _tm = load_faster_whisper(whisper_model, device=transcribe_device,
+-                                  compute_type=compute_type,
+-                                  download_root='/subgen/models')
+-        logging.info("--- [Startup] Model verified ---")
+-        if clear_vram_on_complete:
+-            logging.info("--- [Startup] Clearing VRAM ---")
+-            _tm.model.unload_model()
+-            del _tm
+-            if torch.cuda.is_available():
+-                torch.cuda.empty_cache()
+-            gc.collect()
+-    except Exception as _e:
+-        logging.error(f"Startup eager load failed: {_e}")
++    # [PATCH 0058 parakeet] opt-in via EAGER_MODEL_LOAD (default off).
++    if not eager_model_load:
++        logging.info("--- [Startup] Eager model load skipped (EAGER_MODEL_LOAD=false); models load on first job ---")
++    elif transcribe_backend == 'parakeet':
++        logging.info("--- [Startup] Eager model load check (Parakeet) ---")
++        try:
++            from parakeet_backend import ParakeetHybridModel
++            _tm = ParakeetHybridModel(whisper_loader=_load_whisper_model, model_root=model_location)
++            _tm.preload()
++            logging.info("--- [Startup] Model verified ---")
++            if clear_vram_on_complete:
++                _tm.unload_model()
++            else:
++                model = _tm
++        except Exception as _e:
++            logging.error(f"Startup eager load failed: {_e}")
++    else:
++        logging.info("--- [Startup] Eager model load check ---")
++        try:
++            from stable_whisper import load_faster_whisper
++            _tm = load_faster_whisper(whisper_model, device=transcribe_device,
++                                      compute_type=compute_type,
++                                      download_root='/subgen/models')
++            logging.info("--- [Startup] Model verified ---")
++            if clear_vram_on_complete:
++                logging.info("--- [Startup] Clearing VRAM ---")
++                _tm.model.unload_model()
++                del _tm
++                if torch.cuda.is_available():
++                    torch.cuda.empty_cache()
++                gc.collect()
++        except Exception as _e:
++            logging.error(f"Startup eager load failed: {_e}")
+     # ------------------------------------------------------------------
+ 
+     import uvicorn
+     logging.info(f"Subgen v{subgen_version}")
+     logging.info(f"Threads: {str(whisper_threads)}, Concurrent transcriptions: {str(concurrent_transcriptions)}")
+     logging.info(f"Transcribe device: {transcribe_device}, Model: {whisper_model}")
++    if transcribe_backend == 'parakeet':
++        logging.info(f"Transcribe backend: parakeet ({os.getenv('PARAKEET_MODEL', 'nemo-parakeet-tdt-0.6b-v3')}, "
++                     f"{os.getenv('PARAKEET_QUANTIZATION', 'int8') or 'fp32'}, CPU); WHISPER_MODEL={whisper_model} is used for language detection and fallback only")
+     os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
+     uvicorn.run("__main__:app", host="0.0.0.0", port=int(webhookport), reload=reload_script_on_change, use_colors=True)

@@ -1,0 +1,144 @@
+# Fork build: Parakeet backend (patch 0058).
+#
+# On every push to main (and on demand):
+#   1. smoke   - apply the patch stack, then transcribe a real English clip
+#                with Parakeet TDT 0.6B v3 int8 + Whisper tiny on the CPU
+#                (scripts/parakeet-smoke.py).
+#   2. image   - build docker/Dockerfile and push to GHCR as
+#                ghcr.io/<owner>/subarr-subgen:latest and :parakeet-<sha7>.
+#
+# upstream's release.yml (tag-triggered, coaxk image names) is left untouched
+# so the patch stack stays easy to rebase onto new subarr-subgen releases.
+
+name: fork-image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: parakeet smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout (with submodules)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: setup python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: apply-patches.sh
+        run: bash scripts/apply-patches.sh
+
+      - name: validate-patched.py
+        run: python scripts/validate-patched.py
+
+      - name: install deps (CPU torch + the image's pinned versions)
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+          python -m pip install --disable-pip-version-check torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install --disable-pip-version-check pytest==9.0.3 \
+            numpy==2.2.6 onnxruntime==1.23.2 "onnx-asr[cpu,hub]==0.12.0" \
+            huggingface_hub==1.31.0 faster-whisper==1.2.1 stable-ts-whisperless==2.19.1 av==17.1.0
+
+      - name: pytest
+        run: python -m pytest -q
+
+      - name: real-model smoke test
+        run: |
+          curl -fsSL -o /tmp/jfk.wav https://github.com/ggml-org/whisper.cpp/raw/master/samples/jfk.wav
+          python scripts/parakeet-smoke.py /tmp/models /tmp/jfk.wav
+
+  image:
+    name: build + push image
+    needs: smoke
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: checkout (with submodules)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: apply-patches.sh
+        run: bash scripts/apply-patches.sh
+
+      - name: image names
+        id: names
+        env:
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          owner="$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')"
+          image="ghcr.io/${owner}/subarr-subgen"
+          {
+            echo "image=${image}"
+            echo "sha7=${SHA::7}"
+            echo "source=https://github.com/${REPO}"
+            echo "upstream=$(cat scripts/upstream.pin)"
+            echo "date=$(date -u +%Y-%m-%d)"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: login to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: free disk space (torch cu129 + CUDA base need headroom)
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
+                      /opt/hostedtoolcache/CodeQL /usr/local/.ghcup \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          sudo docker image prune -af || true
+          df -h /
+
+      - name: stage build context (patched tree -> build/)
+        run: |
+          rm -rf build/
+          mkdir -p build/
+          cp -a upstream/. build/
+          rm -rf build/.git
+          cp docker/constraints.txt build/
+
+      - name: build + push (linux/amd64)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: build/
+          file: docker/Dockerfile
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            UPSTREAM_VERSION=${{ steps.names.outputs.upstream }}
+            PATCH_REV=parakeet
+            RELEASE_TAG=parakeet-${{ steps.names.outputs.sha7 }}
+            APT_REFRESH=${{ steps.names.outputs.date }}
+          labels: |
+            org.opencontainers.image.source=${{ steps.names.outputs.source }}
+            org.opencontainers.image.description=subarr-subgen with a Parakeet (onnx-asr, CPU) transcription backend
+          tags: |
+            ${{ steps.names.outputs.image }}:latest
+            ${{ steps.names.outputs.image }}:parakeet-${{ steps.names.outputs.sha7 }}
+          cache-from: type=registry,ref=${{ steps.names.outputs.image }}:buildcache
+          cache-to: type=registry,ref=${{ steps.names.outputs.image }}:buildcache,mode=max

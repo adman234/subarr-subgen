@@ -122,7 +122,7 @@ WORKDIR /subgen
 
 # App files last — changes here don't bust the layers above.
 # subgen.py is the PATCHED version (apply-patches.sh has already run).
-COPY launcher.py subgen.py language_code.py /subgen/
+COPY launcher.py subgen.py language_code.py parakeet_backend.py /subgen/
 
 RUN mkdir -p /cache && chmod 777 /cache
 

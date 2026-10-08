@@ -1,0 +1,59 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>subarr-subgen-parakeet</Name>
+  <Repository>ghcr.io/adman234/subarr-subgen:latest</Repository>
+  <Registry>https://github.com/adman234/subarr-subgen/pkgs/container/subarr-subgen</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>bash</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/adman234/subarr-subgen</Support>
+  <Project>https://github.com/adman234/subarr-subgen</Project>
+  <Overview>subarr-subgen (McCloudS/subgen + subarr patches) with a Parakeet transcription backend. Subtitles are transcribed by NVIDIA Parakeet TDT 0.6B v3 (int8) on the CPU through onnx-asr - no GPU or VRAM used.&#xD;
+&#xD;
+Bazarr: Settings - Providers - Whisper, endpoint http://UNRAID-IP:9006, and raise the transcription timeout (e.g. 10800).&#xD;
+&#xD;
+Language: the language Bazarr sends is always used. Only when it is missing does the small WHISPER_MODEL detect it (DETECT_LANGUAGE_LENGTH seconds). Parakeet covers 25 European languages; other languages and translate requests fall back to WHISPER_MODEL.&#xD;
+&#xD;
+Memory: nothing is loaded until the first job; models unload MODEL_CLEANUP_DELAY seconds after the queue empties. Models are stored in the Models path.&#xD;
+&#xD;
+CPU pinning: set it below. Parakeet uses one thread per pinned CPU unless PARAKEET_THREADS is set.</Overview>
+  <Category>MediaApp:Video Tools:</Category>
+  <WebUI/>
+  <TemplateURL>https://raw.githubusercontent.com/adman234/subarr-subgen/main/unraid/subarr-subgen-parakeet.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/McCloudS/subgen/main/icon.png</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <Config Name="Web Port" Target="9006" Default="9006" Mode="tcp" Description="API port for Bazarr/subarr. Container port must match WEBHOOKPORT." Type="Port" Display="always" Required="true" Mask="false">9006</Config>
+  <Config Name="Internal WEB Port" Target="WEBHOOKPORT" Default="9006" Mode="" Description="Port subgen listens on inside the container. Keep equal to the Web Port container port." Type="Variable" Display="always" Required="true" Mask="false">9006</Config>
+  <Config Name="Data Storage (Media)" Target="/data/media" Default="/mnt/user/data/media/" Mode="rw" Description="Your media. Bazarr, Plex and subgen must see the same files at the same paths (or use USE_PATH_MAPPING)." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/data/media/</Config>
+  <Config Name="Models / AppData" Target="/subgen/models" Default="/mnt/cache/appdata/subgen/" Mode="rw" Description="Model storage: Parakeet + Silero VAD (onnx-asr/ subfolder, ~1 GB) and the Whisper detection model." Type="Path" Display="always" Required="true" Mask="false">/mnt/cache/appdata/subgen/</Config>
+  <Config Name="Path Allowlist" Target="SUBGEN_PATH_ALLOWLIST" Default="/data/media" Mode="" Description="subarr-subgen only serves paths under these container paths (colon-separated). Must cover the media mount, or every request returns 403." Type="Variable" Display="always" Required="true" Mask="false">/data/media</Config>
+  <Config Name="Transcribe Backend" Target="TRANSCRIBE_BACKEND" Default="parakeet|whisper" Mode="" Description="parakeet = Parakeet on CPU (this fork). whisper = stock subgen behaviour." Type="Variable" Display="always" Required="true" Mask="false">parakeet</Config>
+  <Config Name="Hardware Option" Target="TRANSCRIBE_DEVICE" Default="cpu|cuda" Mode="" Description="Device for the Whisper detection/fallback model. Keep cpu for zero VRAM (Parakeet always runs on CPU)." Type="Variable" Display="always" Required="true" Mask="false">cpu</Config>
+  <Config Name="WHISPER_MODEL" Target="WHISPER_MODEL" Default="small|base|tiny|medium|large-v3-turbo" Mode="" Description="With the Parakeet backend this model only detects missing languages and transcribes languages Parakeet can't. small is a good CPU trade-off." Type="Variable" Display="always" Required="true" Mask="false">small</Config>
+  <Config Name="Compute Type" Target="COMPUTE_TYPE" Default="int8|auto|float32" Mode="" Description="Whisper compute type. int8 for CPU." Type="Variable" Display="advanced" Required="false" Mask="false">int8</Config>
+  <Config Name="Parakeet Model" Target="PARAKEET_MODEL" Default="nemo-parakeet-tdt-0.6b-v3|nemo-parakeet-tdt-0.6b-v2" Mode="" Description="v3 = 25 European languages (auto-detects). v2 = English only." Type="Variable" Display="advanced" Required="false" Mask="false">nemo-parakeet-tdt-0.6b-v3</Config>
+  <Config Name="Parakeet Quantization" Target="PARAKEET_QUANTIZATION" Default="int8|none" Mode="" Description="int8 = ~1 GB RAM, fastest on CPU. none = fp32 (~2.5 GB RAM, slightly more accurate, slower)." Type="Variable" Display="advanced" Required="false" Mask="false">int8</Config>
+  <Config Name="Parakeet Threads" Target="PARAKEET_THREADS" Default="0" Mode="" Description="0 = one thread per CPU pinned to this container." Type="Variable" Display="advanced" Required="false" Mask="false">0</Config>
+  <Config Name="Parakeet Fallback" Target="PARAKEET_FALLBACK" Default="whisper|none" Mode="" Description="What to do with languages Parakeet can't transcribe and translate requests: whisper = use WHISPER_MODEL, none = fail the job." Type="Variable" Display="advanced" Required="false" Mask="false">whisper</Config>
+  <Config Name="Concurrent Transcriptions" Target="CONCURRENT_TRANSCRIPTIONS" Default="1" Mode="" Description="Jobs run at once. 1 is best on CPU (parallel jobs just split the same cores)." Type="Variable" Display="always" Required="false" Mask="false">1</Config>
+  <Config Name="Detect Language with 'x' Seconds" Target="DETECT_LANGUAGE_LENGTH" Default="300" Mode="" Description="Audio sampled (Whisper language detector, up to 10 x 30 s windows) when no language is supplied." Type="Variable" Display="always" Required="false" Mask="false">300</Config>
+  <Config Name="Housekeeping Behaviour" Target="CLEAR_VRAM_ON_COMPLETE" Default="true|false" Mode="" Description="Unload the models from RAM when the queue is empty (after MODEL_CLEANUP_DELAY)." Type="Variable" Display="always" Required="false" Mask="false">true</Config>
+  <Config Name="cleanup" Target="MODEL_CLEANUP_DELAY" Default="600" Mode="" Description="Seconds of idle time before models unload." Type="Variable" Display="always" Required="false" Mask="false">600</Config>
+  <Config Name="Eager Model Load" Target="EAGER_MODEL_LOAD" Default="false|true" Mode="" Description="true = download/load models at container start. false = load on first job." Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
+  <Config Name="Transcribe or Translate" Target="TRANSCRIBE_OR_TRANSLATE" Default="transcribe|translate" Mode="" Description="transcribe = subtitles in the audio language (Parakeet). translate goes to the Whisper fallback." Type="Variable" Display="always" Required="false" Mask="false">transcribe</Config>
+  <Config Name="Process Added Media (Plex/Jellyfin)" Target="PROCESS_ADDED_MEDIA" Default="false|true" Mode="" Description="Transcribe when the media server webhook reports new media. Off: Bazarr drives transcription." Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
+  <Config Name="Process Media On Play (Plex/Jellyfin)" Target="PROCESS_MEDIA_ON_PLAY" Default="false|true" Mode="" Description="Transcribe when playback starts. Off: Bazarr drives transcription." Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
+  <Config Name="Plex Server Address" Target="PLEXSERVER" Default="" Mode="" Description="Only needed for the Plex webhook (disabled above)." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="PLEXTOKEN" Target="PLEXTOKEN" Default="" Mode="" Description="Only needed for the Plex webhook (disabled above)." Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
+  <Config Name="Lyric Files" Target="LRC_FOR_AUDIO_FILES" Default="false|true" Mode="" Description="Write LRC instead of SRT for audio files." Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
+  <Config Name="Skip if Subs Exist" Target="SKIPIFEXTERNALSUB" Default="false|true" Mode="" Description="Skip when an external subtitle in NAMESUBLANG already exists." Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
+  <Config Name="Debug Logging" Target="DEBUG" Default="false|true" Mode="" Description="Verbose logs." Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
+  <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="User ID for files written." Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
+  <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="Group ID for files written." Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
+</Container>
