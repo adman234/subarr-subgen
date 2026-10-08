@@ -10,6 +10,7 @@ Run after scripts/apply-patches.sh, which puts parakeet_backend.py in upstream/.
 """
 
 import os
+import re
 import sys
 import time
 
@@ -18,6 +19,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import stable_whisper  # noqa: E402
 
 from parakeet_backend import ParakeetHybridModel  # noqa: E402
+
+def words_only(text: str) -> str:
+    """Lowercase, punctuation-free text: Parakeet's punctuation varies with quantization."""
+    return " ".join(re.sub(r"[^\w\s']", " ", text.lower()).split())
+
 
 REGROUP = "cm_sp=.* /。/?/？_sg=.5_mg=.3++84_p=.3+.7+1.5_sl=42++++++1"
 
@@ -37,8 +43,8 @@ def main() -> None:
     srt = result.to_srt_vtt(filepath=None, word_level=False)
     print(srt)
     print(f"transcribed in {time.time() - t0:.1f}s (incl. download), language={result.language}")
-    text = result.text.lower()
-    assert "ask not what your country can do for you" in text, text
+    text = words_only(result.text)
+    assert "ask not what your country can do for you" in text, result.text
     assert result.language == "en"
     assert srt.startswith("1\n00:00:0"), srt[:40]
     assert all(w.end >= w.start for s in result.segments for w in s.words)
