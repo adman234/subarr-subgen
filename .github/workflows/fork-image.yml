@@ -1,11 +1,14 @@
 # Fork build: Parakeet backend (patch 0058).
 #
-# On every push to main (and on demand):
+# On every push to main or gpu (and on demand):
 #   1. smoke   - apply the patch stack, then transcribe a real English clip
 #                with Parakeet TDT 0.6B v3 int8 + Whisper tiny on the CPU
 #                (scripts/parakeet-smoke.py).
-#   2. image   - build docker/Dockerfile and push to GHCR as
-#                ghcr.io/<owner>/subarr-subgen:latest and :parakeet-<sha7>.
+#   2. image   - build and push to GHCR:
+#                main -> docker/Dockerfile.cpu (CPU-only, lean)
+#                        ghcr.io/<owner>/subarr-subgen:latest, :cpu-<sha7>
+#                gpu  -> docker/Dockerfile (upstream's CUDA base)
+#                        ghcr.io/<owner>/subarr-subgen:gpu, :gpu-<sha7>
 #
 # upstream's release.yml (tag-triggered, coaxk image names) is left untouched
 # so the patch stack stays easy to rebase onto new subarr-subgen releases.
@@ -14,7 +17,7 @@ name: fork-image
 
 on:
   push:
-    branches: [main]
+    branches: [main, gpu]
   workflow_dispatch:
 
 permissions:
@@ -88,11 +91,20 @@ jobs:
           OWNER: ${{ github.repository_owner }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
+          BRANCH: ${{ github.ref_name }}
         run: |
           owner="$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')"
           image="ghcr.io/${owner}/subarr-subgen"
+          if [[ "$BRANCH" == "gpu" ]]; then
+            variant=gpu; dockerfile=docker/Dockerfile; moving_tag=gpu
+          else
+            variant=cpu; dockerfile=docker/Dockerfile.cpu; moving_tag=latest
+          fi
           {
             echo "image=${image}"
+            echo "variant=${variant}"
+            echo "dockerfile=${dockerfile}"
+            echo "moving_tag=${moving_tag}"
             echo "sha7=${SHA::7}"
             echo "source=https://github.com/${REPO}"
             echo "upstream=$(cat scripts/upstream.pin)"
@@ -108,7 +120,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: free disk space (torch cu129 + CUDA base need headroom)
+      - name: free disk space (the CUDA build needs headroom)
         run: |
           df -h /
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
@@ -129,19 +141,19 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: build/
-          file: docker/Dockerfile
+          file: ${{ steps.names.outputs.dockerfile }}
           platforms: linux/amd64
           push: true
           build-args: |
             UPSTREAM_VERSION=${{ steps.names.outputs.upstream }}
-            PATCH_REV=parakeet
-            RELEASE_TAG=parakeet-${{ steps.names.outputs.sha7 }}
+            PATCH_REV=parakeet-${{ steps.names.outputs.variant }}
+            RELEASE_TAG=${{ steps.names.outputs.variant }}-${{ steps.names.outputs.sha7 }}
             APT_REFRESH=${{ steps.names.outputs.date }}
           labels: |
             org.opencontainers.image.source=${{ steps.names.outputs.source }}
-            org.opencontainers.image.description=subarr-subgen with a Parakeet (onnx-asr, CPU) transcription backend
+            org.opencontainers.image.description=subarr-subgen with a Parakeet (onnx-asr, CPU) transcription backend (${{ steps.names.outputs.variant }} image)
           tags: |
-            ${{ steps.names.outputs.image }}:latest
-            ${{ steps.names.outputs.image }}:parakeet-${{ steps.names.outputs.sha7 }}
-          cache-from: type=registry,ref=${{ steps.names.outputs.image }}:buildcache
-          cache-to: type=registry,ref=${{ steps.names.outputs.image }}:buildcache,mode=max
+            ${{ steps.names.outputs.image }}:${{ steps.names.outputs.moving_tag }}
+            ${{ steps.names.outputs.image }}:${{ steps.names.outputs.variant }}-${{ steps.names.outputs.sha7 }}
+          cache-from: type=registry,ref=${{ steps.names.outputs.image }}:buildcache-${{ steps.names.outputs.variant }}
+          cache-to: type=registry,ref=${{ steps.names.outputs.image }}:buildcache-${{ steps.names.outputs.variant }},mode=max

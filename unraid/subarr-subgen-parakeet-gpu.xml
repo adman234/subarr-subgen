@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <Container version="2">
-  <Name>subarr-subgen-parakeet</Name>
-  <Repository>ghcr.io/adman234/subarr-subgen:latest</Repository>
+  <Name>subarr-subgen-parakeet-gpu</Name>
+  <Repository>ghcr.io/adman234/subarr-subgen:gpu</Repository>
   <Registry>https://github.com/adman234/subarr-subgen/pkgs/container/subarr-subgen</Registry>
   <Network>bridge</Network>
   <MyIP/>
@@ -9,7 +9,7 @@
   <Privileged>false</Privileged>
   <Support>https://github.com/adman234/subarr-subgen</Support>
   <Project>https://github.com/adman234/subarr-subgen</Project>
-  <Overview>subarr-subgen (McCloudS/subgen + subarr patches) with a Parakeet transcription backend. Subtitles are transcribed by NVIDIA Parakeet TDT 0.6B v3 (int8) on the CPU through onnx-asr - no GPU or VRAM used. This is the lean CPU-only image (:latest, main branch); a CUDA image is :gpu.&#xD;
+  <Overview>subarr-subgen (McCloudS/subgen + subarr patches) with a Parakeet transcription backend. Subtitles are transcribed by NVIDIA Parakeet TDT 0.6B v3 (int8) on the CPU through onnx-asr - no GPU or VRAM used. This is the CUDA image (:gpu, gpu branch): Parakeet still runs on the CPU, but the Whisper model used for language detection and for languages Parakeet cannot handle runs on the NVIDIA GPU (needs the Nvidia-Driver plugin). VRAM is only used while Whisper is loaded and is freed after MODEL_CLEANUP_DELAY.&#xD;
 &#xD;
 Bazarr: Settings - Providers - Whisper, endpoint http://UNRAID-IP:9006, and raise the transcription timeout (e.g. 10800).&#xD;
 &#xD;
@@ -20,23 +20,23 @@ Memory: nothing is loaded until the first job; models unload MODEL_CLEANUP_DELAY
 CPU pinning: set it below. Parakeet uses one thread per pinned CPU unless PARAKEET_THREADS is set.</Overview>
   <Category>MediaApp:Video Tools:</Category>
   <WebUI/>
-  <TemplateURL>https://raw.githubusercontent.com/adman234/subarr-subgen/main/unraid/subarr-subgen-parakeet.xml</TemplateURL>
+  <TemplateURL>https://raw.githubusercontent.com/adman234/subarr-subgen/main/unraid/subarr-subgen-parakeet-gpu.xml</TemplateURL>
   <Icon>https://raw.githubusercontent.com/McCloudS/subgen/main/icon.png</Icon>
-  <ExtraParams/>
+  <ExtraParams>--runtime=nvidia</ExtraParams>
   <PostArgs/>
   <CPUset/>
   <DonateText/>
   <DonateLink/>
-  <Requires/>
+  <Requires>NVIDIA GPU + Nvidia-Driver plugin.</Requires>
   <Config Name="Web Port" Target="9006" Default="9006" Mode="tcp" Description="API port for Bazarr/subarr. Container port must match WEBHOOKPORT." Type="Port" Display="always" Required="true" Mask="false">9006</Config>
   <Config Name="Internal WEB Port" Target="WEBHOOKPORT" Default="9006" Mode="" Description="Port subgen listens on inside the container. Keep equal to the Web Port container port." Type="Variable" Display="always" Required="true" Mask="false">9006</Config>
   <Config Name="Data Storage (Media)" Target="/data/media" Default="/mnt/user/data/media/" Mode="rw" Description="Your media. Bazarr, Plex and subgen must see the same files at the same paths (or use USE_PATH_MAPPING)." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/data/media/</Config>
   <Config Name="Models / AppData" Target="/subgen/models" Default="/mnt/cache/appdata/subgen/" Mode="rw" Description="Model storage: Parakeet + Silero VAD (onnx-asr/ subfolder, ~1 GB) and the Whisper detection model." Type="Path" Display="always" Required="true" Mask="false">/mnt/cache/appdata/subgen/</Config>
   <Config Name="Path Allowlist" Target="SUBGEN_PATH_ALLOWLIST" Default="/data/media" Mode="" Description="subarr-subgen only serves paths under these container paths (colon-separated). Must cover the media mount, or every request returns 403." Type="Variable" Display="always" Required="true" Mask="false">/data/media</Config>
   <Config Name="Transcribe Backend" Target="TRANSCRIBE_BACKEND" Default="parakeet|whisper" Mode="" Description="parakeet = Parakeet on CPU (this fork). whisper = stock subgen behaviour." Type="Variable" Display="always" Required="true" Mask="false">parakeet</Config>
-  <Config Name="Hardware Option" Target="TRANSCRIBE_DEVICE" Default="cpu" Mode="" Description="This image is CPU-only (main branch). For a GPU Whisper fallback use the :gpu image / GPU template." Type="Variable" Display="always" Required="true" Mask="false">cpu</Config>
-  <Config Name="WHISPER_MODEL" Target="WHISPER_MODEL" Default="small|base|tiny|medium|large-v3-turbo" Mode="" Description="With the Parakeet backend this model only detects missing languages and transcribes languages Parakeet can't. small is a good CPU trade-off." Type="Variable" Display="always" Required="true" Mask="false">small</Config>
-  <Config Name="Compute Type" Target="COMPUTE_TYPE" Default="int8|auto|float32" Mode="" Description="Whisper compute type. int8 for CPU." Type="Variable" Display="advanced" Required="false" Mask="false">int8</Config>
+  <Config Name="Hardware Option" Target="TRANSCRIBE_DEVICE" Default="cuda|cpu" Mode="" Description="Device for the Whisper detection/fallback model (Parakeet always runs on CPU). cuda = GPU." Type="Variable" Display="always" Required="true" Mask="false">cuda</Config>
+  <Config Name="WHISPER_MODEL" Target="WHISPER_MODEL" Default="large-v3-turbo|small|medium|large-v3" Mode="" Description="With the Parakeet backend this model only detects missing languages and transcribes languages Parakeet can't. On the GPU large-v3-turbo is fast. With TRANSCRIBE_BACKEND=whisper it does all transcription (stock subgen)." Type="Variable" Display="always" Required="true" Mask="false">large-v3-turbo</Config>
+  <Config Name="Compute Type" Target="COMPUTE_TYPE" Default="int8_float16|float16|auto|int8" Mode="" Description="Whisper compute type. int8_float16 = lowest VRAM on GPU." Type="Variable" Display="advanced" Required="false" Mask="false">int8_float16</Config>
   <Config Name="Parakeet Model" Target="PARAKEET_MODEL" Default="nemo-parakeet-tdt-0.6b-v3|nemo-parakeet-tdt-0.6b-v2" Mode="" Description="v3 = 25 European languages (auto-detects). v2 = English only." Type="Variable" Display="advanced" Required="false" Mask="false">nemo-parakeet-tdt-0.6b-v3</Config>
   <Config Name="Parakeet Quantization" Target="PARAKEET_QUANTIZATION" Default="int8|none" Mode="" Description="int8 = ~1 GB RAM, fastest on CPU. none = fp32 (~2.5 GB RAM, slightly more accurate, slower)." Type="Variable" Display="advanced" Required="false" Mask="false">int8</Config>
   <Config Name="Parakeet Threads" Target="PARAKEET_THREADS" Default="0" Mode="" Description="0 = one thread per CPU pinned to this container." Type="Variable" Display="advanced" Required="false" Mask="false">0</Config>
@@ -54,6 +54,8 @@ CPU pinning: set it below. Parakeet uses one thread per pinned CPU unless PARAKE
   <Config Name="Lyric Files" Target="LRC_FOR_AUDIO_FILES" Default="false|true" Mode="" Description="Write LRC instead of SRT for audio files." Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
   <Config Name="Skip if Subs Exist" Target="SKIPIFEXTERNALSUB" Default="false|true" Mode="" Description="Skip when an external subtitle in NAMESUBLANG already exists." Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
   <Config Name="Debug Logging" Target="DEBUG" Default="false|true" Mode="" Description="Verbose logs." Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
+  <Config Name="NVIDIA_VISIBLE_DEVICES" Target="NVIDIA_VISIBLE_DEVICES" Default="all" Mode="" Description="GPU UUID from the Nvidia-Driver plugin page, or all." Type="Variable" Display="always" Required="false" Mask="false">all</Config>
+  <Config Name="NVIDIA_DRIVER_CAPABILITIES" Target="NVIDIA_DRIVER_CAPABILITIES" Default="compute,utility" Mode="" Description="Leave as compute,utility." Type="Variable" Display="advanced" Required="false" Mask="false">compute,utility</Config>
   <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="User ID for files written." Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
   <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="Group ID for files written." Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
 </Container>

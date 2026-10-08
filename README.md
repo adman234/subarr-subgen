@@ -4,11 +4,19 @@ This fork adds **patch 0058**: a `TRANSCRIBE_BACKEND=parakeet` option that
 transcribes subtitles with NVIDIA **Parakeet TDT 0.6B v3** (int8) on the **CPU**
 through [onnx-asr](https://github.com/istupakov/onnx-asr). No GPU or VRAM is used.
 
-- **Image:** `ghcr.io/adman234/subarr-subgen:latest` (also `:parakeet-<sha7>`),
-  built by `.github/workflows/fork-image.yml` on every push to `main` after a
-  real-model smoke test (`scripts/parakeet-smoke.py`).
-- **Unraid template:**
-  `wget -O /boot/config/plugins/dockerMan/templates-user/my-subarr-subgen-parakeet.xml https://raw.githubusercontent.com/adman234/subarr-subgen/main/unraid/subarr-subgen-parakeet.xml`
+- **Images** (built by `.github/workflows/fork-image.yml` after a real-model
+  smoke test, `scripts/parakeet-smoke.py`):
+
+  | Branch | Image | Dockerfile | Use |
+  |---|---|---|---|
+  | `main` | `ghcr.io/adman234/subarr-subgen:latest` (`:cpu-<sha7>`) | `docker/Dockerfile.cpu` (ubuntu:22.04, CPU torch) | lean, no GPU at all |
+  | `gpu` | `ghcr.io/adman234/subarr-subgen:gpu` (`:gpu-<sha7>`) | `docker/Dockerfile` (upstream CUDA base) | Whisper detection/fallback on an NVIDIA GPU; Parakeet still on CPU |
+
+  `docker/Dockerfile` is upstream's CUDA file, kept unchanged on `main` so new
+  subarr-subgen releases merge cleanly; only the `gpu` branch builds it.
+- **Unraid templates:**
+  - CPU: `wget -O /boot/config/plugins/dockerMan/templates-user/my-subarr-subgen-parakeet.xml https://raw.githubusercontent.com/adman234/subarr-subgen/main/unraid/subarr-subgen-parakeet.xml`
+  - GPU: `wget -O /boot/config/plugins/dockerMan/templates-user/my-subarr-subgen-parakeet-gpu.xml https://raw.githubusercontent.com/adman234/subarr-subgen/main/unraid/subarr-subgen-parakeet-gpu.xml`
 - **Language:** the language the caller sends (Bazarr's `?language=`, media
   metadata) is always used. Only when it is missing does `WHISPER_MODEL` detect
   it (`DETECT_LANGUAGE_LENGTH` seconds, up to ten 30 s windows).

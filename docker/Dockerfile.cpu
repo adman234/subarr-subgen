@@ -1,0 +1,77 @@
+# CPU-only image for the Parakeet fork (built from the main branch).
+#
+# Same layers as docker/Dockerfile (the CUDA image, built from the gpu branch)
+# with the CUDA base and cu129 torch wheels swapped for ubuntu:22.04 and the
+# CPU wheels. See docker/Dockerfile for why each layer is ordered and pinned
+# the way it is. Ubuntu 22.04 keeps the CUDA base's python3 (3.10), so
+# docker/constraints.txt resolves identically.
+#
+# Parakeet runs on ONNX Runtime's CPU provider and Whisper (language
+# detection / fallback) on CTranslate2's CPU path. Nothing here can use a GPU:
+# run it with TRANSCRIBE_DEVICE=cpu.
+
+FROM ubuntu:22.04
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+        ffmpeg python3 python3-pip curl gosu tzdata
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python3 -m pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cpu \
+    && python3 -m pip install --no-deps torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cpu \
+    && python3 -m pip install setuptools==84.0.0
+
+COPY requirements.txt constraints.txt /
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python3 -m pip install -U -r /requirements.txt -c /constraints.txt
+
+RUN python3 -c "import torch, torchaudio, stable_whisper, setuptools; \
+v, a, st = torch.__version__, torchaudio.__version__, setuptools.__version__; \
+print('torch', v, 'torchaudio', a, 'stable_whisper', stable_whisper.__version__, 'setuptools', st); \
+assert v.startswith('2.13.0+cpu'), v; \
+assert a.startswith('2.11.0+cpu'), a; \
+assert st == '84.0.0', st"
+
+ARG APT_REFRESH=0
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    echo "apt-refresh=${APT_REFRESH}" \
+    && apt-get update && apt-get upgrade -y \
+    && apt-get purge -y --auto-remove python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /subgen
+
+COPY launcher.py subgen.py language_code.py parakeet_backend.py /subgen/
+
+RUN mkdir -p /cache && chmod 777 /cache
+
+ENV XDG_CACHE_HOME=/cache \
+    HF_HOME=/cache/huggingface \
+    MPLCONFIGDIR=/cache/matplotlib \
+    PYTHONUNBUFFERED=1
+
+ENV CUSTOM_REGROUP="cm_sp=.* /。/?/？_sg=.5_mg=.3++84_p=.3+.7+1.5_sl=42++++++1"
+
+ENV SUBGEN_KWARGS='{"no_speech_threshold": 0.6, "vad_filter": true, "vad_parameters": {"threshold": 0.35, "min_speech_duration_ms": 250, "min_silence_duration_ms": 500, "speech_pad_ms": 600}, "condition_on_previous_text": false, "beam_size": 5, "patience": 1.0, "length_penalty": 1.0, "repetition_penalty": 1.05, "no_repeat_ngram_size": 3, "compression_ratio_threshold": 2.4, "log_prob_threshold": -0.8, "temperature": [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]}'
+
+ENV SUBGEN_KWARGS_LANG_JA='{"patience": 1.0, "length_penalty": 1.3}'
+
+ARG UPSTREAM_VERSION=unknown
+ARG PATCH_REV=unknown
+ARG RELEASE_TAG=dev
+ENV SUBARR_SUBGEN_RELEASE_TAG="${RELEASE_TAG}"
+
+LABEL org.opencontainers.image.title="subarr-subgen"
+LABEL org.opencontainers.image.description="McCloudS/subgen + subarr patches + Parakeet backend (CPU-only image)"
+LABEL org.opencontainers.image.source="https://github.com/coaxk/subarr-subgen"
+LABEL org.opencontainers.image.licenses="MIT"
+LABEL subarr.subgen.upstream_version="${UPSTREAM_VERSION}"
+LABEL subarr.subgen.patch_rev="${PATCH_REV}"
+LABEL subarr.subgen.release_tag="${RELEASE_TAG}"
+LABEL subarr.subgen.upstream_source="https://github.com/McCloudS/subgen"
+
+COPY entrypoint.sh /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["python3", "launcher.py"]
