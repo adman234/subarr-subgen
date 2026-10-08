@@ -46,13 +46,16 @@ jobs:
       - name: validate-patched.py
         run: python scripts/validate-patched.py
 
-      - name: install deps (CPU torch + the image's pinned versions)
+      - name: install deps (the image's pinned versions)
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
-          python -m pip install --disable-pip-version-check torch --index-url https://download.pytorch.org/whl/cpu
+          # torch/torchaudio come from PyPI as a matching pair (a CPU-index torch
+          # plus PyPI torchaudio fails to load _torchaudio.abi3.so).
+          python -m pip install --disable-pip-version-check torch torchaudio
           python -m pip install --disable-pip-version-check pytest==9.0.3 \
             numpy==2.2.6 onnxruntime==1.23.2 "onnx-asr[cpu,hub]==0.12.0" \
             huggingface_hub==1.31.0 faster-whisper==1.2.1 stable-ts-whisperless==2.19.1 av==17.1.0
+          python -c "import torch, torchaudio, stable_whisper; print('torch', torch.__version__, 'torchaudio', torchaudio.__version__)"
 
       - name: pytest
         run: python -m pytest -q
