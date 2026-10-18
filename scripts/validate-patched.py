@@ -154,6 +154,60 @@ def validate_launcher() -> None:
     ok("patch 0046 (no runtime pip install over the pinned deps)")
 
 
+def handler_calls(node, callee):
+    """True when an `except` handler somewhere under `node` calls `callee`."""
+    for h in ast.walk(node):
+        if isinstance(h, ast.ExceptHandler):
+            for sub in ast.walk(h):
+                if (
+                    isinstance(sub, ast.Call)
+                    and isinstance(sub.func, ast.Name)
+                    and sub.func.id == callee
+                ):
+                    return True
+    return False
+
+
+def validate_failed_load_release(tree) -> None:
+    """Patch 0058 (#77): a failed model load must hand its CUDA pool memory back.
+
+    CTranslate2's cuda_malloc_async allocator returns freed memory to the
+    driver only at the next synchronisation, so a load that fails with OOM
+    leaves the VRAM held on an idle server. The helper has to run from the
+    FAILURE path of both load sites: start_model() (every runtime load,
+    including the /config swap and its rollback) and the startup eager load.
+    A re-port that keeps the helper but drops either call leaves it dead code.
+    """
+    name = "release_cuda_pool_after_failed_load"
+    if not any(
+        isinstance(n, ast.FunctionDef) and n.name == name for n in ast.walk(tree)
+    ):
+        fail(f"{name}() is not defined - patch 0058 not landed")
+    start_model = next(
+        (
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name == "start_model"
+        ),
+        None,
+    )
+    if start_model is None or not handler_calls(start_model, name):
+        fail(
+            f"start_model() does not call {name}() from an except handler - patch 0058"
+        )
+    main_blocks = [
+        n
+        for n in tree.body
+        if isinstance(n, ast.If)
+        and isinstance(n.test, ast.Compare)
+        and isinstance(n.test.left, ast.Name)
+        and n.test.left.id == "__name__"
+    ]
+    if not any(handler_calls(b, name) for b in main_blocks):
+        fail(f"the startup eager load does not call {name}() on failure - patch 0058")
+    ok("patch 0058 (#77 failed loads release the CUDA pool, both load sites)")
+
+
 def main() -> int:
     if not TARGET.is_file():
         fail(f"{TARGET} not found — did you run apply-patches.sh?")
@@ -387,6 +441,7 @@ def main() -> int:
         ok(label)
 
     validate_launcher()
+    validate_failed_load_release(tree)
 
     print()
     print("VALIDATE: all gates passed.")
