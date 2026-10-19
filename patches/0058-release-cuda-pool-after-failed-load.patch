@@ -1,0 +1,119 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: subarr-subgen <subarr@localhost>
+Date: Sun, 18 Oct 2026 15:49:11 +1100
+Subject: [PATCH] 0058: release CUDA pool memory after a failed model load
+ (#77)
+
+CTranslate2 4.8 defaults to the cuda_malloc_async allocator, which frees
+with cudaFreeAsync into the device default memory pool. The pool release
+threshold is 0, so freed memory returns to the driver only at the next
+synchronisation. A model load that fails with CUDA OOM frees its partial
+weights and nothing synchronises, so an idle server held about 2.2 GiB
+until the next job ran (reported in #77, confirmed by the reporter with
+CT2_VERBOSE=1 and nvidia-smi).
+
+release_cuda_pool_after_failed_load() synchronises the primary context and
+trims the default pool to zero through the driver API, then logs free VRAM
+before and after. It runs from the start_model() failure path, which every
+runtime load uses including the /config swap and its rollback, and from the
+startup eager-load failure path. Best effort: it never raises.
+---
+ subgen.py | 73 ++++++++++++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 72 insertions(+), 1 deletion(-)
+
+diff --git a/subgen.py b/subgen.py
+index fb5bbf3..ab9e5f3 100644
+--- a/subgen.py
++++ b/subgen.py
+@@ -2350,12 +2350,82 @@ def extract_audio_segment_to_memory(input_file, start_time, duration, track=None
+         logging.error(f"Error: {str(e)}")
+         return None
+ 
++def release_cuda_pool_after_failed_load(device_index=0):
++    """[PATCH 0058 / #77] Hand back the VRAM a failed model load leaves behind.
++
++    CTranslate2's default CUDA allocator (cuda_malloc_async) allocates from
++    the device's default memory pool and frees with cudaFreeAsync. With the
++    pool's release threshold at its default of 0, freed memory goes back to
++    the driver only at the next synchronisation. A load that fails (CUDA OOM
++    while another process holds the card) frees its partial weights and
++    nothing synchronises afterwards, so an idle server kept ~2.2 GiB until the
++    next job ran. Synchronise the context, then trim the pool to zero.
++
++    Uses the driver API so it does not depend on which CUDA runtime copy
++    torch or CTranslate2 linked. Best effort: never raises, returns the pool's
++    reserved MiB (before, after) or None when it could not run. Reports the
++    POOL's own counter, not device free memory, which other processes on the
++    card (Ollama) move while this runs.
++    """
++    if not str(transcribe_device).lower().startswith("cuda"):
++        return None
++    try:
++        cuda = ctypes.CDLL("libcuda.so.1")
++    except OSError:
++        return None
++    size_t = ctypes.c_size_t
++    CU_MEMPOOL_ATTR_RESERVED_MEM_CURRENT = 5
++
++    def _ok(rc, what):
++        if rc != 0:
++            raise RuntimeError(f"{what} returned CUresult {rc}")
++
++    try:
++        _ok(cuda.cuInit(0), "cuInit")
++        dev = ctypes.c_int()
++        _ok(cuda.cuDeviceGet(ctypes.byref(dev), device_index), "cuDeviceGet")
++        ctx = ctypes.c_void_p()
++        _ok(cuda.cuDevicePrimaryCtxRetain(ctypes.byref(ctx), dev), "cuDevicePrimaryCtxRetain")
++        try:
++            _ok(cuda.cuCtxPushCurrent_v2(ctx), "cuCtxPushCurrent")
++            try:
++                pool = ctypes.c_void_p()
++                _ok(cuda.cuDeviceGetDefaultMemPool(ctypes.byref(pool), dev), "cuDeviceGetDefaultMemPool")
++                reserved = ctypes.c_uint64()
++                _ok(cuda.cuMemPoolGetAttribute(pool, CU_MEMPOOL_ATTR_RESERVED_MEM_CURRENT,
++                                               ctypes.byref(reserved)), "cuMemPoolGetAttribute")
++                before = reserved.value >> 20
++                _ok(cuda.cuCtxSynchronize(), "cuCtxSynchronize")
++                _ok(cuda.cuMemPoolTrimTo(pool, size_t(0)), "cuMemPoolTrimTo")
++                _ok(cuda.cuMemPoolGetAttribute(pool, CU_MEMPOOL_ATTR_RESERVED_MEM_CURRENT,
++                                               ctypes.byref(reserved)), "cuMemPoolGetAttribute")
++                after = reserved.value >> 20
++            finally:
++                cuda.cuCtxPopCurrent_v2(ctypes.byref(ctypes.c_void_p()))
++        finally:
++            cuda.cuDevicePrimaryCtxRelease_v2(dev)
++    except Exception as e:
++        logging.warning(f"Could not release CUDA memory after the failed model load: {e}. "
++                        "If VRAM stays held, restart subgen.")
++        return None
++    msg = (f"Released {max(before - after, 0)} MiB of CUDA memory held by the failed model load "
++           f"(memory pool {before} -> {after} MiB)")
++    if after > 0:
++        logging.warning(msg + f"; {after} MiB is still held. If it does not drop, restart subgen.")
++    else:
++        logging.info(msg)
++    return before, after
++
+ def start_model():
+     global model
+     with model_load_lock:
+         if model is None:
+             logging.debug("Model was purged, need to re-create")
+-            model = stable_whisper.load_faster_whisper(whisper_model, download_root=model_location, device=transcribe_device, cpu_threads=whisper_threads, num_workers=concurrent_transcriptions, compute_type=compute_type)
++            try:
++                model = stable_whisper.load_faster_whisper(whisper_model, download_root=model_location, device=transcribe_device, cpu_threads=whisper_threads, num_workers=concurrent_transcriptions, compute_type=compute_type)
++            except Exception:
++                release_cuda_pool_after_failed_load()  # [PATCH 0058 / #77]
++                raise
+ 
+ def schedule_model_cleanup():
+     """Schedule model cleanup with a delay to allow concurrent requests.
+@@ -3674,6 +3744,7 @@ if __name__ == "__main__":
+             gc.collect()
+     except Exception as _e:
+         logging.error(f"Startup eager load failed: {_e}")
++        release_cuda_pool_after_failed_load()  # [PATCH 0058 / #77]
+     # ------------------------------------------------------------------
+ 
+     import uvicorn

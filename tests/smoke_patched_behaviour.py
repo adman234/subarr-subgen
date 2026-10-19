@@ -287,6 +287,80 @@ check(
     _inspect.signature(subgen.should_skip_file).parameters["bypass_skip"].default is False,
 )
 
+
+# ---------------------------------------------------------------------------
+# patch 0058 (#77): a failed model load hands its CUDA pool memory back
+#
+# The structural gate in validate-patched.py proves the call sites exist. These
+# prove the behaviour that makes the call safe to sit on a failure path: the
+# load error still reaches the caller (the /config swap's 422 and rollback
+# depend on it), and the helper never raises, with or without a GPU.
+# ---------------------------------------------------------------------------
+
+_released = []
+_orig_loader = subgen.stable_whisper.load_faster_whisper
+_orig_release = subgen.release_cuda_pool_after_failed_load
+_orig_model = subgen.model
+
+
+def _oom_loader(*a, **kw):
+    raise RuntimeError("CUDA failed with error out of memory")
+
+
+subgen.stable_whisper.load_faster_whisper = _oom_loader
+subgen.release_cuda_pool_after_failed_load = lambda *a, **kw: _released.append(1)
+subgen.model = None
+_raised = None
+try:
+    subgen.start_model()
+except RuntimeError as e:
+    _raised = e
+finally:
+    subgen.stable_whisper.load_faster_whisper = _orig_loader
+    subgen.release_cuda_pool_after_failed_load = _orig_release
+    subgen.model = _orig_model
+
+check(
+    "#77/0058 start_model re-raises the load error",
+    _raised is not None and "out of memory" in str(_raised),
+    f"raised={_raised!r}",
+)
+check(
+    "#77/0058 start_model releases the pool exactly once on a failed load",
+    len(_released) == 1,
+    f"calls={len(_released)}",
+)
+
+_orig_device = subgen.transcribe_device
+subgen.transcribe_device = "cpu"
+try:
+    check(
+        "#77/0058 helper is a no-op on CPU",
+        subgen.release_cuda_pool_after_failed_load() is None,
+    )
+finally:
+    subgen.transcribe_device = _orig_device
+
+_orig_cdll = subgen.ctypes.CDLL
+
+
+def _no_libcuda(name, *a, **kw):
+    if "libcuda" in str(name):
+        raise OSError(f"{name}: cannot open shared object file")
+    return _orig_cdll(name, *a, **kw)
+
+
+subgen.transcribe_device = "cuda"
+subgen.ctypes.CDLL = _no_libcuda
+try:
+    check(
+        "#77/0058 helper returns None, not an exception, without libcuda",
+        subgen.release_cuda_pool_after_failed_load() is None,
+    )
+finally:
+    subgen.ctypes.CDLL = _orig_cdll
+    subgen.transcribe_device = _orig_device
+
 print()
 print("RESULT:", "ALL SMOKES PASSED" if not FAILS else f"{len(FAILS)} FAILED: {FAILS}")
 sys.exit(1 if FAILS else 0)

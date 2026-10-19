@@ -1,4 +1,4 @@
-"""Unit tests for upstream/parakeet_backend.py (patch 0058), with fake models.
+"""Unit tests for upstream/parakeet_backend.py (patch 0060), with fake models.
 
 Skipped where numpy / stable-ts are not installed (the PR workflow's pytest
 step installs pytest only); scripts/parakeet-smoke.py covers the real models.

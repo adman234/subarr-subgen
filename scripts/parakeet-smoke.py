@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real-model smoke test for the Parakeet backend (patch 0058).
+"""Real-model smoke test for the Parakeet backend (patch 0060).
 
 Downloads Parakeet TDT 0.6B v3 (int8), Silero VAD and Whisper tiny into
 MODEL_ROOT, then transcribes a known English clip:

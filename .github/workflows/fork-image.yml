@@ -1,4 +1,4 @@
-# Fork build: Parakeet backend (patch 0058).
+# Fork build: Parakeet backend (patch 0060).
 #
 # On every push to main or gpu (and on demand):
 #   1. smoke   - apply the patch stack, then transcribe a real English clip

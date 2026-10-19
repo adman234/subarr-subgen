@@ -1,6 +1,6 @@
 # subarr-subgen + Parakeet (fork)
 
-This fork adds **patch 0058**: a `TRANSCRIBE_BACKEND=parakeet` option that
+This fork adds **patch 0060**: a `TRANSCRIBE_BACKEND=parakeet` option that
 transcribes subtitles with NVIDIA **Parakeet TDT 0.6B v3** (int8) on the **CPU**
 through [onnx-asr](https://github.com/istupakov/onnx-asr). No GPU or VRAM is used.
 

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: adman234 fork <noreply@github.com>
 Date: Thu, 08 Oct 2026 12:00:00 +0000
-Subject: [PATCH] 0058: Parakeet (onnx-asr, CPU) transcription backend
+Subject: [PATCH] 0060: Parakeet (onnx-asr, CPU) transcription backend
 
 TRANSCRIBE_BACKEND=parakeet transcribes with NVIDIA Parakeet TDT through
 onnx-asr on the CPU (no VRAM). The language the caller supplies (Bazarr's
@@ -410,18 +410,18 @@ index f771ae4..096a888 100644
  watchdog
 +onnx-asr[cpu,hub]
 diff --git a/subgen.py b/subgen.py
-index fb5bbf3..ba1e56d 100644
+index 06c9b10..288b8e0 100644
 --- a/subgen.py
 +++ b/subgen.py
 @@ -159,6 +159,13 @@ custom_regroup = os.getenv('CUSTOM_REGROUP', 'cm_sl=84_sl=42++++++1')
  detect_language_length = int(os.getenv('DETECT_LANGUAGE_LENGTH', 30))
  detect_language_offset = int(os.getenv('DETECT_LANGUAGE_OFFSET', 0))
  model_cleanup_delay = int(os.getenv('MODEL_CLEANUP_DELAY', 30))
-+# [PATCH 0058 parakeet] TRANSCRIBE_BACKEND=parakeet transcribes with NVIDIA
++# [PATCH 0060 parakeet] TRANSCRIBE_BACKEND=parakeet transcribes with NVIDIA
 +# Parakeet (onnx-asr, CPU). WHISPER_MODEL then only detects languages and
 +# handles languages Parakeet can't. See parakeet_backend.py.
 +transcribe_backend = os.getenv('TRANSCRIBE_BACKEND', 'whisper').strip().lower()
-+# [PATCH 0058 parakeet] The startup model download/verify (patch 0002) is now
++# [PATCH 0060 parakeet] The startup model download/verify (patch 0002) is now
 +# opt-in, so a restart leaves nothing loaded until the first job arrives.
 +eager_model_load = convert_to_bool(os.getenv('EAGER_MODEL_LOAD', False))
  asr_timeout = int(os.getenv('ASR_TIMEOUT', 18000))
@@ -441,7 +441,7 @@ index fb5bbf3..ba1e56d 100644
          args['verbose'] = False # Hide the confusing progress bar
          
 -        result = model.transcribe(**args)
-+        if hasattr(model, 'detect_only'):  # [PATCH 0058 parakeet]
++        if hasattr(model, 'detect_only'):  # [PATCH 0060 parakeet]
 +            result = _detect_language_only(args['audio'], args.get('input_sr'))
 +        else:
 +            result = model.transcribe(**args)
@@ -453,13 +453,13 @@ index fb5bbf3..ba1e56d 100644
          
          # FIX: Hide confusing progress bar and use from_string for ISO codes
 -        result = model.transcribe(audio_segment, verbose=False)
-+        result = _detect_language_only(audio_segment)  # [PATCH 0058 parakeet]
++        result = _detect_language_only(audio_segment)  # [PATCH 0060 parakeet]
          detected_language = LanguageCode.from_string(result.language)
          
          logging.info(f"Detected language: {detected_language.to_name()} [probability: {getattr(result, 'language_probability', None) or 'unknown'}]")
-@@ -2350,12 +2360,36 @@ def extract_audio_segment_to_memory(input_file, start_time, duration, track=None
-         logging.error(f"Error: {str(e)}")
-         return None
+@@ -2416,17 +2426,41 @@ def release_cuda_pool_after_failed_load(device_index=0):
+         logging.info(msg)
+     return before, after
  
 +def _load_whisper_model():
 +    return stable_whisper.load_faster_whisper(whisper_model, download_root=model_location, device=transcribe_device, cpu_threads=whisper_threads, num_workers=concurrent_transcriptions, compute_type=compute_type)
@@ -469,22 +469,26 @@ index fb5bbf3..ba1e56d 100644
      with model_load_lock:
          if model is None:
              logging.debug("Model was purged, need to re-create")
--            model = stable_whisper.load_faster_whisper(whisper_model, download_root=model_location, device=transcribe_device, cpu_threads=whisper_threads, num_workers=concurrent_transcriptions, compute_type=compute_type)
-+            if transcribe_backend == 'parakeet':
-+                # [PATCH 0058 parakeet] Models inside load lazily: Parakeet on the
-+                # first transcription, Whisper only if detection/fallback needs it.
-+                from parakeet_backend import ParakeetHybridModel
-+                model = ParakeetHybridModel(
-+                    whisper_loader=_load_whisper_model,
-+                    model_root=model_location,
-+                    detect_seconds=detect_language_length,
-+                    detect_offset=detect_language_offset,
-+                )
-+            else:
-+                model = _load_whisper_model()
-+
+             try:
+-                model = stable_whisper.load_faster_whisper(whisper_model, download_root=model_location, device=transcribe_device, cpu_threads=whisper_threads, num_workers=concurrent_transcriptions, compute_type=compute_type)
++                if transcribe_backend == 'parakeet':
++                    # [PATCH 0060 parakeet] Models inside load lazily: Parakeet on the
++                    # first transcription, Whisper only if detection/fallback needs it.
++                    from parakeet_backend import ParakeetHybridModel
++                    model = ParakeetHybridModel(
++                        whisper_loader=_load_whisper_model,
++                        model_root=model_location,
++                        detect_seconds=detect_language_length,
++                        detect_offset=detect_language_offset,
++                    )
++                else:
++                    model = _load_whisper_model()
+             except Exception:
+                 release_cuda_pool_after_failed_load()  # [PATCH 0058 / #77]
+                 raise
+ 
 +def _detect_language_only(audio, input_sr=None):
-+    """[PATCH 0058 parakeet] Language of an already-trimmed clip. The Parakeet
++    """[PATCH 0060 parakeet] Language of an already-trimmed clip. The Parakeet
 +    backend runs Whisper's language detector only, rather than transcribing the
 +    whole DETECT_LANGUAGE_LENGTH window."""
 +    if hasattr(model, 'detect_only'):
@@ -492,10 +496,11 @@ index fb5bbf3..ba1e56d 100644
 +    if input_sr is not None:
 +        return model.transcribe(audio, input_sr=input_sr, verbose=False)
 +    return model.transcribe(audio, verbose=False)
- 
++
  def schedule_model_cleanup():
      """Schedule model cleanup with a delay to allow concurrent requests.
-@@ -3658,27 +3692,47 @@ def transcribe_existing(transcribe_folders, forceLanguage : LanguageCode | None
+     
+@@ -3728,28 +3762,49 @@ def transcribe_existing(transcribe_folders, forceLanguage : LanguageCode | None
  
  if __name__ == "__main__":
      # [v4 PATCH] Eager model load on boot (ensures download/verify at startup)
@@ -515,7 +520,8 @@ index fb5bbf3..ba1e56d 100644
 -            gc.collect()
 -    except Exception as _e:
 -        logging.error(f"Startup eager load failed: {_e}")
-+    # [PATCH 0058 parakeet] opt-in via EAGER_MODEL_LOAD (default off).
+-        release_cuda_pool_after_failed_load()  # [PATCH 0058 / #77]
++    # [PATCH 0060 parakeet] opt-in via EAGER_MODEL_LOAD (default off).
 +    if not eager_model_load:
 +        logging.info("--- [Startup] Eager model load skipped (EAGER_MODEL_LOAD=false); models load on first job ---")
 +    elif transcribe_backend == 'parakeet':
@@ -531,6 +537,7 @@ index fb5bbf3..ba1e56d 100644
 +                model = _tm
 +        except Exception as _e:
 +            logging.error(f"Startup eager load failed: {_e}")
++            release_cuda_pool_after_failed_load()  # [PATCH 0058 / #77]
 +    else:
 +        logging.info("--- [Startup] Eager model load check ---")
 +        try:
@@ -548,6 +555,7 @@ index fb5bbf3..ba1e56d 100644
 +                gc.collect()
 +        except Exception as _e:
 +            logging.error(f"Startup eager load failed: {_e}")
++            release_cuda_pool_after_failed_load()  # [PATCH 0058 / #77]
      # ------------------------------------------------------------------
  
      import uvicorn
