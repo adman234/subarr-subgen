@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: subarr-subgen <subarr@localhost>
+Date: Fri, 30 Oct 2026 12:00:00 +1100
+Subject: [PATCH] 0062: advertise which audio track subgen will transcribe
+
+subarr cannot choose transcribe vs translate per file without knowing which
+audio language subgen will actually use. choose_transcribe_language picks it
+in this order: the forced language, FORCE_DETECTED_LANGUAGE_TO,
+PREFERRED_AUDIO_LANGUAGES in list order against the file's tracks, then the
+default track. Only the first was visible to subarr.
+
+Adds two values to the capabilities block served by GET /queue:
+
+- preferred_audio_languages: the list in order, unfiltered, duplicates kept.
+  An entry that parsed to LanguageCode.NONE is emitted as null, NOT dropped:
+  upstream matches a NONE entry against an untagged track and the falsy
+  result makes choose_transcribe_language fall through to the default track,
+  skipping every later entry. Dropping nulls would make subarr predict an
+  entry subgen never reaches.
+- force_detected_language_to: the ISO 639-1 code, or null when unset.
+
+Both are values, not boolean flags, so the capability audit's flag list is
+unchanged. Requested by AztecGuyGDL as coaxk/subarr#633.
+---
+ subgen.py | 21 +++++++++++++++++++++
+ 1 file changed, 21 insertions(+)
+
+diff --git a/subgen.py b/subgen.py
+index 4173662..1071c06 100644
+--- a/subgen.py
++++ b/subgen.py
+@@ -904,6 +904,27 @@ def queue_status():
+             # full producible set: English via translate, or the file's own
+             # audio language via transcribe.
+             "transcribe_or_translate": transcribe_or_translate,
++            # [v4.38 PATCH #633] Which audio track subgen will TRANSCRIBE, as
++            # far as the instance settings decide it. choose_transcribe_language
++            # tries: the forced language, FORCE_DETECTED_LANGUAGE_TO, then
++            # PREFERRED_AUDIO_LANGUAGES in list order against the file's tracks,
++            # then the default track. None of the last three were visible, so
++            # subarr could not tell which audio language a file would be
++            # transcribed from, and so could not pick transcribe vs translate
++            # per file (coaxk/subarr#633, reported by AztecGuyGDL).
++            #
++            # The list is emitted IN ORDER, unfiltered, duplicates kept, and an
++            # entry that parsed to LanguageCode.NONE is emitted as null rather
++            # than dropped. Upstream's find_language_audio_track matches a NONE
++            # entry against an untagged track and returns NONE, which
++            # choose_transcribe_language treats as falsy ("no preferred match"),
++            # so it falls through to the default track and never reaches any
++            # LATER entry. Dropping the nulls would make subarr predict a later
++            # entry that subgen never gets to.
++            "preferred_audio_languages": [
++                (lc.to_iso_639_1() or None) for lc in preferred_audio_languages
++            ],
++            "force_detected_language_to": force_detected_language_to.to_iso_639_1() or None,
+             # Renames the OUTPUT FILE without changing the language of its
+             # CONTENTS. An install in translate mode with
+             # SUBTITLE_LANGUAGE_NAME=es writes English text into a .es.srt,

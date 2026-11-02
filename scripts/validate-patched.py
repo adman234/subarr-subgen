@@ -335,14 +335,22 @@ def main() -> int:
             '"subtitle_language_name": subtitle_language_name or "",',
             "patch 0050 (#505 output naming advertised)",
         ),
+        (
+            '"preferred_audio_languages": [',
+            "patch 0062 (#633 preferred audio languages advertised)",
+        ),
+        (
+            '"force_detected_language_to": force_detected_language_to.to_iso_639_1() or None,',
+            "patch 0062 (#633 forced detected language advertised)",
+        ),
         # patch_rev is cumulative -- each bump patch overwrites the last, so the
         # only value observable in the fully-patched tree is the newest one.
         # Assert against the LAST bump patch in the series and update this needle
         # whenever a new bump patch is added (0030 -> v4.17 went stale when 0032
         # landed v4.18, and this check failed silently behind an apply failure).
         (
-            "subarr_subgen_patch_rev = 'v4.35'",
-            "patch 0059 (patch_rev bump v4.35, latest)",
+            "subarr_subgen_patch_rev = 'v4.38'",
+            "patch 0063 (patch_rev bump v4.38, latest)",
         ),
         # --- patch 0054 (#69: direct-task claim) ------------------------------
         # perform_model_cleanup() reads "is the system idle" and then unloads

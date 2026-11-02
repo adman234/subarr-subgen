@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: subarr-subgen <subarr@localhost>
+Date: Wed, 21 Oct 2026 17:20:00 +1100
+Subject: [PATCH] 0060: bump patch rev to v4.36
+
+Security rebuild, no code change. promote-stable.yml refused
+2026.08.1-r15 on 2026-10-21 (run 39553244747): measured inside the published
+image, 2 packages pending from jammy-security (ca-certificates
+20260601~22.04.1 -> 20260816ubuntu0.22.04.1, liblzma5 5.2.5-2ubuntu1.1 ->
+5.2.5-2ubuntu1.2). The rev moves so the two images are distinguishable.
+
+---
+ subgen.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/subgen.py b/subgen.py
+index 06c9b10..0000000 100644
+--- a/subgen.py
++++ b/subgen.py
+@@ -2,7 +2,7 @@ subgen_version = '2026.08.1'
+ # [v4.3 PATCH] subarr-subgen patch-stack revision, surfaced via /queue so subarr
+ # can detect our extended capabilities (audio_language_override, etc.) and
+ # degrade gracefully against vanilla mccloud/subgen which lacks them.
+-subarr_subgen_patch_rev = 'v4.35'
++subarr_subgen_patch_rev = 'v4.36'
+ 
+ """
+ ENVIRONMENT VARIABLES DOCUMENTATION

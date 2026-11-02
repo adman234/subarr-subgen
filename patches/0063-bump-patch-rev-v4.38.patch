@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: subarr-subgen <subarr@localhost>
+Date: Fri, 30 Oct 2026 12:05:00 +1100
+Subject: [PATCH] 0063: bump patch rev to v4.38
+
+Moves the rev so subarr can tell an instance that advertises
+preferred_audio_languages / force_detected_language_to (patch 0062,
+coaxk/subarr#633) from one that does not.
+
+---
+ subgen.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/subgen.py b/subgen.py
+index 1071c06..6ff1b3a 100644
+--- a/subgen.py
++++ b/subgen.py
+@@ -2,7 +2,7 @@ subgen_version = '2026.08.1'
+ # [v4.3 PATCH] subarr-subgen patch-stack revision, surfaced via /queue so subarr
+ # can detect our extended capabilities (audio_language_override, etc.) and
+ # degrade gracefully against vanilla mccloud/subgen which lacks them.
+-subarr_subgen_patch_rev = 'v4.37'
++subarr_subgen_patch_rev = 'v4.38'
+ 
+ """
+ ENVIRONMENT VARIABLES DOCUMENTATION

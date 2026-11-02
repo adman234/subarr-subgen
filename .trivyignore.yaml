@@ -1,0 +1,20 @@
+# trivy exceptions for the security.yml gate. Each entry is scoped to one CVE
+# in one package VERSION (purl) and carries an expiry, so it cannot outlive
+# the reasoning: a changed pin or a passed date turns the gate red again.
+
+vulnerabilities:
+  - id: CVE-2026-112940 # GHSA-v4x8-3wr5-3wq8
+    purls:
+      - "pkg:pypi/filelock@3.32.3"
+    expired_at: 2026-12-15
+    statement: >-
+      Not affected: vulnerable code not in execute path. The flaw is in
+      filelock's SQLite-backed ReadWriteLock (the lock database is reopened by
+      name, so a planted symlink or journal file redirects writes). Measured
+      in the r17 image on 2026-10-29: the only filelock names imported anywhere
+      in site-packages are FileLock, BaseFileLock, SoftFileLock and Timeout
+      (huggingface_hub, torch); nothing imports ReadWriteLock. The fix cannot
+      be installed here: every patched release (>= 4.2.1) requires Python
+      >= 3.11 and the image is jammy with Python 3.10, while the last
+      3.10-compatible release (4.1.0) is still inside the vulnerable range.
+      Removed by the base-image move to Python 3.12, coaxk/subarr-subgen#83.

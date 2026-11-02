@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: adman234 fork <noreply@github.com>
 Date: Thu, 08 Oct 2026 12:00:00 +0000
-Subject: [PATCH] 0060: Parakeet (onnx-asr, CPU) transcription backend
+Subject: [PATCH] 0064: Parakeet (onnx-asr, CPU) transcription backend
 
 TRANSCRIBE_BACKEND=parakeet transcribes with NVIDIA Parakeet TDT through
 onnx-asr on the CPU (no VRAM). The language the caller supplies (Bazarr's
@@ -417,11 +417,11 @@ index 06c9b10..288b8e0 100644
  detect_language_length = int(os.getenv('DETECT_LANGUAGE_LENGTH', 30))
  detect_language_offset = int(os.getenv('DETECT_LANGUAGE_OFFSET', 0))
  model_cleanup_delay = int(os.getenv('MODEL_CLEANUP_DELAY', 30))
-+# [PATCH 0060 parakeet] TRANSCRIBE_BACKEND=parakeet transcribes with NVIDIA
++# [PATCH 0064 parakeet] TRANSCRIBE_BACKEND=parakeet transcribes with NVIDIA
 +# Parakeet (onnx-asr, CPU). WHISPER_MODEL then only detects languages and
 +# handles languages Parakeet can't. See parakeet_backend.py.
 +transcribe_backend = os.getenv('TRANSCRIBE_BACKEND', 'whisper').strip().lower()
-+# [PATCH 0060 parakeet] The startup model download/verify (patch 0002) is now
++# [PATCH 0064 parakeet] The startup model download/verify (patch 0002) is now
 +# opt-in, so a restart leaves nothing loaded until the first job arrives.
 +eager_model_load = convert_to_bool(os.getenv('EAGER_MODEL_LOAD', False))
  asr_timeout = int(os.getenv('ASR_TIMEOUT', 18000))
@@ -441,7 +441,7 @@ index 06c9b10..288b8e0 100644
          args['verbose'] = False # Hide the confusing progress bar
          
 -        result = model.transcribe(**args)
-+        if hasattr(model, 'detect_only'):  # [PATCH 0060 parakeet]
++        if hasattr(model, 'detect_only'):  # [PATCH 0064 parakeet]
 +            result = _detect_language_only(args['audio'], args.get('input_sr'))
 +        else:
 +            result = model.transcribe(**args)
@@ -453,7 +453,7 @@ index 06c9b10..288b8e0 100644
          
          # FIX: Hide confusing progress bar and use from_string for ISO codes
 -        result = model.transcribe(audio_segment, verbose=False)
-+        result = _detect_language_only(audio_segment)  # [PATCH 0060 parakeet]
++        result = _detect_language_only(audio_segment)  # [PATCH 0064 parakeet]
          detected_language = LanguageCode.from_string(result.language)
          
          logging.info(f"Detected language: {detected_language.to_name()} [probability: {getattr(result, 'language_probability', None) or 'unknown'}]")
@@ -472,7 +472,7 @@ index 06c9b10..288b8e0 100644
              try:
 -                model = stable_whisper.load_faster_whisper(whisper_model, download_root=model_location, device=transcribe_device, cpu_threads=whisper_threads, num_workers=concurrent_transcriptions, compute_type=compute_type)
 +                if transcribe_backend == 'parakeet':
-+                    # [PATCH 0060 parakeet] Models inside load lazily: Parakeet on the
++                    # [PATCH 0064 parakeet] Models inside load lazily: Parakeet on the
 +                    # first transcription, Whisper only if detection/fallback needs it.
 +                    from parakeet_backend import ParakeetHybridModel
 +                    model = ParakeetHybridModel(
@@ -488,7 +488,7 @@ index 06c9b10..288b8e0 100644
                  raise
  
 +def _detect_language_only(audio, input_sr=None):
-+    """[PATCH 0060 parakeet] Language of an already-trimmed clip. The Parakeet
++    """[PATCH 0064 parakeet] Language of an already-trimmed clip. The Parakeet
 +    backend runs Whisper's language detector only, rather than transcribing the
 +    whole DETECT_LANGUAGE_LENGTH window."""
 +    if hasattr(model, 'detect_only'):
@@ -521,7 +521,7 @@ index 06c9b10..288b8e0 100644
 -    except Exception as _e:
 -        logging.error(f"Startup eager load failed: {_e}")
 -        release_cuda_pool_after_failed_load()  # [PATCH 0058 / #77]
-+    # [PATCH 0060 parakeet] opt-in via EAGER_MODEL_LOAD (default off).
++    # [PATCH 0064 parakeet] opt-in via EAGER_MODEL_LOAD (default off).
 +    if not eager_model_load:
 +        logging.info("--- [Startup] Eager model load skipped (EAGER_MODEL_LOAD=false); models load on first job ---")
 +    elif transcribe_backend == 'parakeet':
