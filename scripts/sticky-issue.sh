@@ -14,8 +14,8 @@
 # cycle, and a genuinely new occurrence opens a new issue.
 #
 # Uses gh (native, no third-party action). Requires GH_TOKEN in the env and
-# the repo's issues:write permission. Labels passed in must already exist
-# (gh does not auto-create them).
+# the repo's issues:write permission. gh does not auto-create labels, so any
+# label that does not exist yet is created first (forks start with none).
 #
 # Usage:
 #   sticky-issue.sh <repo> <sticky_label> <title> <body_file> <labels> <note>
@@ -36,5 +36,13 @@ if [ -n "$existing" ]; then
   gh issue comment "$existing" --repo "$REPO" --body "$NOTE"
 else
   echo "no open issue for label=$STICKY_LABEL — creating"
+  existing_labels="$(gh label list --repo "$REPO" --limit 500 --json name --jq '.[].name')"
+  IFS=',' read -ra wanted <<< "$LABELS"
+  for label in "${wanted[@]}"; do
+    if ! grep -qxF -- "$label" <<< "$existing_labels"; then
+      echo "creating missing label: $label"
+      gh label create "$label" --repo "$REPO"
+    fi
+  done
   gh issue create --repo "$REPO" --title "$TITLE" --body-file "$BODY_FILE" --label "$LABELS"
 fi

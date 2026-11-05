@@ -43,7 +43,9 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      IMAGE: ghcr.io/coaxk/subarr-subgen:latest
+      # This repo's own published image (fork-image.yml pushes
+      # ghcr.io/<owner>/subarr-subgen:latest), not the upstream project's.
+      OWNER: ${{ github.repository_owner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -53,6 +55,8 @@ jobs:
         id: inspect
         run: |
           set -euo pipefail
+          IMAGE="ghcr.io/$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')/subarr-subgen:latest"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
           docker pull -q "$IMAGE"
 
           BUILT="$(docker inspect "$IMAGE" --format '{{.Created}}')"
