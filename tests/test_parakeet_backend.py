@@ -101,3 +101,46 @@ def test_unload_drops_both_models():
     m._ensure_whisper()
     m.model.unload_model()
     assert m._asr is None and m._whisper is None
+
+
+def test_same_frame_tokens_stay_monotonic_and_build_a_result():
+    # TDT repetition loop: every token stamped at the same frame (issue: UnsortedException)
+    toks = [" a", " little", " bit", " of", " a", " little", " bit", "."]
+    words = pb.words_from_segment(570.0, 581.4, toks, [9.9] * len(toks), [-0.1] * len(toks))
+    assert all(a["end"] <= b["start"] for a, b in zip(words, words[1:]))
+    assert all(w["end"] > w["start"] for w in words)
+
+
+def test_overlapping_vad_segments_do_not_raise_unsorted():
+    pytest.importorskip("stable_whisper")
+
+    class _LoopAsr:
+        def recognize(self, wave, sample_rate):
+            toks = [" little", " bit", " of", " a", " little", " bit", "."]
+            yield _Seg(570.0, 581.4, "x", toks, [9.9] * len(toks))
+            yield _Seg(581.3, 583.0, "Okay.", [" Okay", "."], [0.0, 0.3])
+
+    m = pb.ParakeetHybridModel.__new__(pb.ParakeetHybridModel)
+    m._ensure_parakeet = lambda: _LoopAsr()
+    result = m._transcribe_parakeet(np.zeros(16000, np.float32), "en", None, True)
+    starts = [w.start for s in result.segments for w in s.words]
+    assert starts == sorted(starts)
+
+
+def test_onnx_arena_off_and_batch_one_by_default(monkeypatch, tmp_path):
+    pytest.importorskip("onnxruntime")
+    monkeypatch.delenv("PARAKEET_CPU_MEM_ARENA", raising=False)
+    monkeypatch.delenv("PARAKEET_BATCH_SIZE", raising=False)
+    m = pb.ParakeetHybridModel(whisper_loader=lambda: None, model_root=str(tmp_path))
+    so = m._session_options()
+    assert so.enable_cpu_mem_arena is False
+    assert m.batch_size == 1
+
+
+def test_onnx_memory_knobs_are_configurable(monkeypatch, tmp_path):
+    pytest.importorskip("onnxruntime")
+    monkeypatch.setenv("PARAKEET_CPU_MEM_ARENA", "true")
+    monkeypatch.setenv("PARAKEET_BATCH_SIZE", "8")
+    m = pb.ParakeetHybridModel(whisper_loader=lambda: None, model_root=str(tmp_path))
+    assert m._session_options().enable_cpu_mem_arena is True
+    assert m.batch_size == 8

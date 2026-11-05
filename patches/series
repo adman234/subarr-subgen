@@ -67,3 +67,5 @@
 0062-advertise-track-choice.patch
 0063-bump-patch-rev-v4.38.patch
 0064-parakeet-backend.patch
+0065-parakeet-monotonic-word-timestamps.patch
+0066-parakeet-bound-onnx-memory.patch

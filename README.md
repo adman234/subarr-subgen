@@ -38,6 +38,8 @@ through [onnx-asr](https://github.com/istupakov/onnx-asr). No GPU or VRAM is use
 | `PARAKEET_FALLBACK` | `whisper` | `none` to fail unsupported languages instead |
 | `PARAKEET_LANGUAGES` | (model default) | override the supported-language list |
 | `PARAKEET_MAX_SEGMENT_S` | `20` | longest VAD segment sent to Parakeet |
+| `PARAKEET_BATCH_SIZE` | `1` | VAD segments per encoder call; higher = more peak RAM for little CPU speedup |
+| `PARAKEET_CPU_MEM_ARENA` | `false` | `true` re-enables ONNX Runtime's CPU arena (keeps its peak memory for the life of the model) |
 | `PARAKEET_VAD_THRESHOLD` / `_MIN_SILENCE_MS` / `_SPEECH_PAD_MS` | `0.5` / `300` / `100` | Silero VAD tuning |
 | `EAGER_MODEL_LOAD` | `false` | `true` restores patch 0002's load-at-startup |
 

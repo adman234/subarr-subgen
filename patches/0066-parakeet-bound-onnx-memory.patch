@@ -1,0 +1,74 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: adman234 fork <noreply@github.com>
+Date: Thu, 05 Nov 2026 12:00:00 +0000
+Subject: [PATCH] 0066: Parakeet: bound ONNX Runtime memory (arena off, batch 1)
+
+Two settings made the container's memory climb and stay high:
+
+* onnx-asr runs 8 VAD segments per encoder call by default, so each call is
+  an 8 x 20 s padded batch through the 0.6B encoder. On CPU that buys little
+  throughput but multiplies peak activation memory. PARAKEET_BATCH_SIZE
+  (default 1) now controls it.
+* ONNX Runtime's CPU memory arena keeps the high-water mark of every
+  session for the life of the model and fragments when input shapes vary,
+  which they do on every VAD batch. It is now off by default
+  (PARAKEET_CPU_MEM_ARENA=true restores it).
+
+---
+diff --git a/parakeet_backend.py b/parakeet_backend.py
+--- a/parakeet_backend.py
++++ b/parakeet_backend.py
+@@ -171,6 +171,13 @@
+     return np.frombuffer(proc.stdout, np.int16).astype(np.float32) / 32768.0
+ 
+ 
++def _env_bool(name: str, default: bool) -> bool:
++    val = os.getenv(name)
++    if val is None or not val.strip():
++        return default
++    return val.strip().lower() in ("1", "true", "yes", "on")
++
++
+ class ParakeetHybridModel:
+     """Parakeet for transcription; a small Whisper model for detection and fallback."""
+ 
+@@ -198,6 +205,10 @@
+         self.detect_seconds = max(1, int(detect_seconds))
+         self.detect_offset = max(0, int(detect_offset))
+         self.max_segment_s = float(max_segment_s or os.getenv("PARAKEET_MAX_SEGMENT_S", "20"))
++        # onnx-asr defaults to 8 VAD segments per encoder call (8 x 20 s padded
++        # batch). On CPU batching barely helps throughput but multiplies peak
++        # activation memory, so default to 1.
++        self.batch_size = max(1, int(os.getenv("PARAKEET_BATCH_SIZE", "1")))
+         self.languages = supported_languages(self.model_name)
+ 
+         self._lock = threading.RLock()
+@@ -213,6 +224,11 @@
+         so = ort.SessionOptions()
+         so.intra_op_num_threads = self.threads
+         so.inter_op_num_threads = 1
++        # ORT's CPU arena grows to the largest batch it has seen and never gives
++        # memory back; VAD batches change shape on every call, so it also
++        # fragments. Off by default: RSS then tracks the current batch.
++        so.enable_cpu_mem_arena = _env_bool("PARAKEET_CPU_MEM_ARENA", False)
++        so.enable_mem_pattern = so.enable_cpu_mem_arena
+         return so
+ 
+     def _local_dir(self, name: str) -> str:
+@@ -251,7 +267,7 @@
+             providers = ["CPUExecutionProvider"]
+             logging.info(
+                 f"Loading Parakeet model {self.model_name} (quantization={self.quantization or 'fp32'}, "
+-                f"threads={self.threads}) from {self._local_dir(self.model_name)}"
++                f"threads={self.threads}, batch={self.batch_size}) from {self._local_dir(self.model_name)}"
+             )
+             asr = self._load_into(
+                 self._local_dir(self.model_name),
+@@ -269,6 +285,7 @@
+             self._asr = asr.with_vad(
+                 vad,
+                 max_speech_duration_s=self.max_segment_s,
++                batch_size=self.batch_size,
+                 min_silence_duration_ms=float(os.getenv("PARAKEET_VAD_MIN_SILENCE_MS", "300")),
+                 speech_pad_ms=float(os.getenv("PARAKEET_VAD_SPEECH_PAD_MS", "100")),
+                 threshold=float(os.getenv("PARAKEET_VAD_THRESHOLD", "0.5")),

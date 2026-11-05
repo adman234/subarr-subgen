@@ -1,0 +1,88 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: adman234 fork <noreply@github.com>
+Date: Wed, 04 Nov 2026 12:00:00 +0000
+Subject: [PATCH] 0065: Parakeet: force monotonic word/segment timestamps
+
+The TDT decoder can stamp several tokens with the same frame (seen in a
+repetition loop: "little bit of a little bit" all at 579.90s). The minimum
+word duration then pushed each word's end past the next word's start, and
+stable-ts's WhisperResult raised UnsortedException, failing the whole ASR
+job. Start every word no earlier than the previous word's end, and carry
+that floor across VAD segments (speech padding can make them overlap).
+
+---
+diff --git a/parakeet_backend.py b/parakeet_backend.py
+--- a/parakeet_backend.py
++++ b/parakeet_backend.py
+@@ -82,12 +82,19 @@
+     return PARAKEET_V3_LANGUAGES
+ 
+ 
+-def words_from_segment(seg_start: float, seg_end: float, tokens, timestamps, logprobs) -> list[dict]:
++def words_from_segment(seg_start: float, seg_end: float, tokens, timestamps, logprobs,
++                       floor: float = 0.0) -> list[dict]:
+     """Group onnx-asr subword tokens into stable-ts word dicts.
+ 
+     onnx-asr turns the SentencePiece word marker into a leading space, so a
+     token starting with a space begins a new word. Token timestamps are
+     relative to the VAD segment.
++
++    Words are forced to be monotonic and non-overlapping (starting no earlier
++    than ``floor`` / the previous word's end). The TDT decoder can stamp several
++    tokens with the same frame (e.g. a repetition loop), and the minimum word
++    duration would otherwise push a word's end past the next word's start,
++    which stable-ts rejects with UnsortedException.
+     """
+     tokens = tokens or []
+     timestamps = timestamps or []
+@@ -102,21 +109,24 @@
+             grouped[-1]["logprobs"].append(lp)
+ 
+     words = []
++    last_end = floor
+     for j, g in enumerate(grouped):
+         text = g["text"]
+         if not text.strip():
+             continue
+         if not text.startswith(" "):
+             text = " " + text
+-        start = seg_start + g["start"]
++        start = max(seg_start + g["start"], last_end)
+         next_start = seg_start + grouped[j + 1]["start"] if j + 1 < len(grouped) else seg_end
+         end = min(next_start, start + _MAX_WORD_DURATION_S, seg_end)
+         end = max(end, start + _MIN_WORD_DURATION_S)
++        start, end = round(start, 3), round(end, 3)
++        last_end = end
+         prob = float(np.exp(np.mean(g["logprobs"]))) if g["logprobs"] else 1.0
+         words.append({
+             "word": text,
+-            "start": round(start, 3),
+-            "end": round(end, 3),
++            "start": start,
++            "end": end,
+             "probability": min(max(prob, 0.0), 1.0),
+         })
+     return words
+@@ -354,16 +364,20 @@
+         asr = self._ensure_parakeet()
+         total = len(wave) / SAMPLE_RATE
+         segments = []
++        last_end = 0.0
+         for seg in asr.recognize(wave, sample_rate=SAMPLE_RATE):
+             text = (seg.text or "").strip()
+             if not text:
+                 continue
+-            words = words_from_segment(seg.start, seg.end, seg.tokens, seg.timestamps, seg.logprobs)
+-            segment = {"start": round(seg.start, 3), "end": round(seg.end, 3), "text": " " + text}
++            words = words_from_segment(seg.start, seg.end, seg.tokens, seg.timestamps, seg.logprobs,
++                                       floor=last_end)
++            seg_start = round(max(seg.start, last_end), 3)
++            segment = {"start": seg_start, "end": round(max(seg.end, seg_start), 3), "text": " " + text}
+             if words:
+                 segment["words"] = words
+                 segment["start"] = words[0]["start"]
+                 segment["end"] = max(words[-1]["end"], segment["start"])
++            last_end = segment["end"]
+             segments.append(segment)
+             if progress_callback:
+                 try:
