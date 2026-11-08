@@ -69,3 +69,5 @@
 0064-parakeet-backend.patch
 0065-parakeet-monotonic-word-timestamps.patch
 0066-parakeet-bound-onnx-memory.patch
+0067-per-request-task-subtitle-naming.patch
+0068-bump-patch-rev-v4.39.patch

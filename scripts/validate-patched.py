@@ -349,8 +349,24 @@ def main() -> int:
         # whenever a new bump patch is added (0030 -> v4.17 went stale when 0032
         # landed v4.18, and this check failed silently behind an apply failure).
         (
-            "subarr_subgen_patch_rev = 'v4.38'",
-            "patch 0063 (patch_rev bump v4.38, latest)",
+            "subarr_subgen_patch_rev = 'v4.39'",
+            "patch 0068 (patch_rev bump v4.39, latest)",
+        ),
+        # --- patch 0067: per-request task decides the subtitle's file name -----
+        # Without it a per-request translate on a transcribe-default instance is
+        # named after the SOURCE language (English text in "<stem>.ko.srt"). The
+        # naming must take the job's task, and gen_subtitles must pass it.
+        (
+            "subtitle_file_path = name_subtitle(file_path, output_language, transcription_type)",
+            "patch 0067 (gen_subtitles names the file by the job's own task)",
+        ),
+        (
+            "if (task or transcribe_or_translate) == 'translate':",
+            "patch 0067 (naming honours the per-request task over the global)",
+        ),
+        (
+            "written_language = LanguageCode.ENGLISH if transcription_type == 'translate' else output_language",
+            "patch 0067 (completion webhook reports the written language)",
         ),
         # --- patch 0054 (#69: direct-task claim) ------------------------------
         # perform_model_cleanup() reads "is the system idle" and then unloads

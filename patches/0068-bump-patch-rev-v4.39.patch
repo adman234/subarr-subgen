@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: subarr-subgen <subarr@localhost>
+Date: Sun, 8 Nov 2026 22:00:52 +0000
+Subject: [PATCH] 0068: bump patch rev to v4.39
+
+Moves the rev so a client can tell an instance that names per-request
+translations as English (patch 0067) from one that names them after the
+source language.
+---
+ subgen.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/subgen.py b/subgen.py
+index b839600..edaabe7 100644
+--- a/subgen.py
++++ b/subgen.py
+@@ -2,7 +2,7 @@ subgen_version = '2026.08.1'
+ # [v4.3 PATCH] subarr-subgen patch-stack revision, surfaced via /queue so subarr
+ # can detect our extended capabilities (audio_language_override, etc.) and
+ # degrade gracefully against vanilla mccloud/subgen which lacks them.
+-subarr_subgen_patch_rev = 'v4.38'
++subarr_subgen_patch_rev = 'v4.39'
+ 
+ """
+ ENVIRONMENT VARIABLES DOCUMENTATION

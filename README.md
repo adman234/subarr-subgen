@@ -24,6 +24,11 @@ through [onnx-asr](https://github.com/istupakov/onnx-asr). No GPU or VRAM is use
   hu, it, lv, lt, mt, pl, pt, ro, sk, sl, es, sv, ru, uk. Other languages and
   `task=translate` go to `WHISPER_MODEL` (`PARAKEET_FALLBACK=whisper`) or fail
   (`PARAKEET_FALLBACK=none`).
+- **Per-request translate is named English** (patch 0067, rev v4.39): a
+  `POST /batch?task=translate` on an instance whose `TRANSCRIBE_OR_TRANSLATE`
+  is `transcribe` now writes `<video>[.subgen][.<model>].en.srt`. Before, the
+  name followed the global setting and the source language, so English text
+  landed in e.g. `.ko.srt` and Bazarr/Plex filed it as Korean.
 - **Memory:** models load on the first job (`EAGER_MODEL_LOAD=false`, new
   default) and unload with the existing `CLEAR_VRAM_ON_COMPLETE` /
   `MODEL_CLEANUP_DELAY` cleanup. Parakeet and Silero VAD are stored under
