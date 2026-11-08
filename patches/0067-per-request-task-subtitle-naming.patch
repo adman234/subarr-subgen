@@ -1,0 +1,98 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: subarr-subgen <subarr@localhost>
+Date: Sun, 8 Nov 2026 22:00:52 +0000
+Subject: [PATCH] 0067: name translated subtitles after the job's own task
+
+Patch 0015 lets POST /batch set the task (transcribe|translate) per request,
+but define_subtitle_language_naming() still switched the output name to
+English only when the GLOBAL TRANSCRIBE_OR_TRANSLATE was 'translate'. In
+gen_subtitles, result.language is the SOURCE language even in translate
+mode, so a per-request translate on a transcribe-default instance wrote
+English text into '<stem>[.subgen][.<model>].ko.srt'. Bazarr, Plex and
+any other reader then filed an English subtitle as Korean, and a later
+per-request translate of the same file could not see its own output.
+
+name_subtitle() and define_subtitle_language_naming() take an optional
+task; gen_subtitles passes the job's transcription_type, and the
+completion webhook reports the language the file is written in (English
+for a translate). task=None keeps the old global behaviour, so every
+other caller (the should_skip_file expected-output check) is unchanged.
+---
+ subgen.py | 23 ++++++++++++++++-------
+ 1 file changed, 16 insertions(+), 7 deletions(-)
+
+diff --git a/subgen.py b/subgen.py
+index 1ade45e..b839600 100644
+--- a/subgen.py
++++ b/subgen.py
+@@ -2656,11 +2656,17 @@ def gen_subtitles(file_path: str, transcription_type: str, force_language: Langu
+             subtitle_file_path = file_name + '.lrc'
+             write_lrc(result, subtitle_file_path)
+         else:
+-            subtitle_file_path = name_subtitle(file_path, output_language)
++            # [PATCH 0067] name the file after THIS job's task, not the global
++            # TRANSCRIBE_OR_TRANSLATE. result.language is the SOURCE language even in
++            # translate mode, so a per-request translate (patch 0015) on a
++            # transcribe-default instance wrote English text into "<stem>.ko.srt".
++            subtitle_file_path = name_subtitle(file_path, output_language, transcription_type)
+             result.to_srt_vtt(subtitle_file_path, word_level=word_level_highlight)
+-            
++
+         # Trigger the downstream webhook
+-        send_completion_webhook(file_path, subtitle_file_path, output_language, transcription_type)
++        # [PATCH 0067] report the language the subtitle is WRITTEN in: English for a translate.
++        written_language = LanguageCode.ENGLISH if transcription_type == 'translate' else output_language
++        send_completion_webhook(file_path, subtitle_file_path, written_language, transcription_type)
+ 
+         # FIX: Provide the generated subtitle result to any waiting ASR endpoint requests
+         with task_results_lock:
+@@ -2677,13 +2683,14 @@ def gen_subtitles(file_path: str, transcription_type: str, force_language: Langu
+     finally:
+         delete_model()
+         
+-def define_subtitle_language_naming(language: LanguageCode, type):
++def define_subtitle_language_naming(language: LanguageCode, type, task: str | None = None):
+     """
+     Determines the naming format for a subtitle language based on the given type. 
+ 
+     Args:
+         language (LanguageCode): The language code object containing methods to get different formats of the language name.
+         type (str): The type of naming format desired, such as 'ISO_639_1', 'ISO_639_2_T', 'ISO_639_2_B', 'NAME', or 'NATIVE'.
++        task (str | None): [PATCH 0067] the job's own task ('transcribe' / 'translate'); None = the global setting.
+ 
+     Returns:
+         str: The language name in the specified format. If an invalid type is provided, it defaults to the language's name.
+@@ -2694,7 +2701,8 @@ def define_subtitle_language_naming(language: LanguageCode, type):
+     # This MUST come before switch_dict is built: its values are bound methods,
+     # captured against whatever `language` refers to at construction time. Rebinding
+     # `language` afterwards would leave them pointing at the original language.
+-    if transcribe_or_translate == 'translate':
++    # [PATCH 0067] the job's own task wins over the global (per-request task, patch 0015).
++    if (task or transcribe_or_translate) == 'translate':
+         language = LanguageCode.ENGLISH
+     switch_dict = {
+         "ISO_639_1": language.to_iso_639_1,
+@@ -2705,20 +2713,21 @@ def define_subtitle_language_naming(language: LanguageCode, type):
+     }
+     return switch_dict.get(type, language.to_name)()
+ 
+-def name_subtitle(file_path: str, language: LanguageCode) -> str:
++def name_subtitle(file_path: str, language: LanguageCode, task: str | None = None) -> str:
+     """
+     Name the subtitle file to be written, based on the source file and the language of the subtitle. 
+     
+     Args: 
+         file_path: The path to the source file.
+         language: The language of the subtitle.
++        task: [PATCH 0067] the job's task ('transcribe' / 'translate'); None = the global setting.
+     
+     Returns:
+         The name of the subtitle file to be written.
+     """
+     subgen_part = ".subgen" if show_in_subname_subgen else ""
+     model_part = f".{whisper_model}" if show_in_subname_model else ""
+-    lang_part = define_subtitle_language_naming(language, subtitle_language_naming_type)
++    lang_part = define_subtitle_language_naming(language, subtitle_language_naming_type, task)
+     
+     return f"{os.path.splitext(file_path)[0]}{subgen_part}{model_part}.{lang_part}.srt"
+     
