@@ -20,7 +20,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 RUN --mount=type=cache,target=/root/.cache/pip \
     python3 -m pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cpu \
     && python3 -m pip install --no-deps torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cpu \
-    && python3 -m pip install setuptools==84.0.0
+    && python3 -m pip install setuptools==84.2.1
 
 COPY requirements.txt constraints.txt /
 RUN --mount=type=cache,target=/root/.cache/pip \
@@ -31,7 +31,7 @@ v, a, st = torch.__version__, torchaudio.__version__, setuptools.__version__; \
 print('torch', v, 'torchaudio', a, 'stable_whisper', stable_whisper.__version__, 'setuptools', st); \
 assert v.startswith('2.13.0+cpu'), v; \
 assert a.startswith('2.11.0+cpu'), a; \
-assert st == '84.0.0', st"
+assert st == '84.2.1', st"
 
 ARG APT_REFRESH=0
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
