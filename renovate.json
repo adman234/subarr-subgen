@@ -1,8 +1,11 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "local>adman234/renovate-config"
-  ],
-  "description": "Dependabot (dependabot.yml, from upstream) already updates GitHub Actions, so Renovate leaves them alone",
-  "ignorePaths": [".github/**"]
+  "extends": ["local>adman234/renovate-config"],
+  "packageRules": [
+    {
+      "description": "pr.yml tests every PR, so merge minor and patch updates once it passes",
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
+      "automerge": true
+    }
+  ]
 }
