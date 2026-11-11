@@ -1,0 +1,8 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "local>adman234/renovate-config"
+  ],
+  "description": "Dependabot (dependabot.yml, from upstream) already updates GitHub Actions, so Renovate leaves them alone",
+  "ignorePaths": [".github/**"]
+}
