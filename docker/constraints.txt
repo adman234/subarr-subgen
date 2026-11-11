@@ -33,9 +33,9 @@
 #                      dependency. Pinning it would hold back the fixed copy
 #                      setuptools 84 vendors.
 #
-# setuptools IS pinned, at the 84.0.0 the Dockerfile asserts -- without it the
+# setuptools IS pinned, at the 84.2.1 the Dockerfile asserts -- without it the
 # requirements step's -U could move it and trip that assert. Note the image also
-# carries a SHADOWED apt setuptools 59.6.0 egg-info under /usr/lib; 84.0.0 is
+# carries a SHADOWED apt setuptools 59.6.0 egg-info under /usr/lib; 84.2.1 is
 # what imports, because /usr/local wins on sys.path. This file records the one
 # that wins, which is why gen-constraints.sh ranks by sys.path and not by
 # whatever importlib.metadata happens to yield last.
@@ -96,7 +96,7 @@ pydantic_core==2.46.5
 python-multipart==0.0.32
 PyYAML==6.0.3
 requests==2.34.2
-setuptools==84.0.0
+setuptools==84.2.1
 stable-ts-whisperless==2.19.1
 starlette==1.6.0
 sympy==1.14.0
