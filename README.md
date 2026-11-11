@@ -7,13 +7,14 @@ through [onnx-asr](https://github.com/istupakov/onnx-asr). No GPU or VRAM is use
 - **Images** (built by `.github/workflows/fork-image.yml` after a real-model
   smoke test, `scripts/parakeet-smoke.py`):
 
-  | Branch | Image | Dockerfile | Use |
+  | Variant | Image | Dockerfile | Use |
   |---|---|---|---|
-  | `main` | `ghcr.io/adman234/subarr-subgen:latest` (`:cpu-<sha7>`) | `docker/Dockerfile.cpu` (ubuntu:22.04, CPU torch) | lean, no GPU at all |
-  | `gpu` | `ghcr.io/adman234/subarr-subgen:gpu` (`:gpu-<sha7>`) | `docker/Dockerfile` (upstream CUDA base) | Whisper detection/fallback on an NVIDIA GPU; Parakeet still on CPU |
+  | CPU | `ghcr.io/adman234/subarr-subgen:latest` (`:cpu-<sha7>`) | `docker/Dockerfile.cpu` (ubuntu:22.04, CPU torch) | lean, no GPU at all |
+  | GPU | `ghcr.io/adman234/subarr-subgen:gpu` (`:gpu-<sha7>`) | `docker/Dockerfile` (upstream CUDA base) | Whisper detection/fallback on an NVIDIA GPU; Parakeet still on CPU |
 
-  `docker/Dockerfile` is upstream's CUDA file, kept unchanged on `main` so new
-  subarr-subgen releases merge cleanly; only the `gpu` branch builds it.
+  Every push to `main` builds both images from the same commit; pick one by
+  tag. `docker/Dockerfile` is upstream's CUDA file, kept unchanged so new
+  subarr-subgen releases merge cleanly.
 - **Unraid templates:**
   - CPU: `wget -O /boot/config/plugins/dockerMan/templates-user/my-subarr-subgen-parakeet.xml https://raw.githubusercontent.com/adman234/subarr-subgen/main/unraid/subarr-subgen-parakeet.xml`
   - GPU: `wget -O /boot/config/plugins/dockerMan/templates-user/my-subarr-subgen-parakeet-gpu.xml https://raw.githubusercontent.com/adman234/subarr-subgen/main/unraid/subarr-subgen-parakeet-gpu.xml`

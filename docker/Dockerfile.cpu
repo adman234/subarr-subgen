@@ -1,6 +1,6 @@
 # CPU-only image for the Parakeet fork (built from the main branch).
 #
-# Same layers as docker/Dockerfile (the CUDA image, built from the gpu branch)
+# Same layers as docker/Dockerfile (the CUDA image, the gpu variant)
 # with the CUDA base and cu129 torch wheels swapped for ubuntu:22.04 and the
 # CPU wheels. See docker/Dockerfile for why each layer is ordered and pinned
 # the way it is. Ubuntu 22.04 keeps the CUDA base's python3 (3.10), so

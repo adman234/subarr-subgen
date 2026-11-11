@@ -1,14 +1,14 @@
 # Fork build: Parakeet backend (patch 0064).
 #
-# On every push to main or gpu (and on demand):
+# On every push to main (and on demand):
 #   1. smoke   - apply the patch stack, then transcribe a real English clip
 #                with Parakeet TDT 0.6B v3 int8 + Whisper tiny on the CPU
 #                (scripts/parakeet-smoke.py).
-#   2. image   - build and push to GHCR:
-#                main -> docker/Dockerfile.cpu (CPU-only, lean)
-#                        ghcr.io/<owner>/subarr-subgen:latest, :cpu-<sha7>
-#                gpu  -> docker/Dockerfile (upstream's CUDA base)
-#                        ghcr.io/<owner>/subarr-subgen:gpu, :gpu-<sha7>
+#   2. image   - build and push both images to GHCR from the same commit:
+#                cpu -> docker/Dockerfile.cpu (CPU-only, lean)
+#                       ghcr.io/<owner>/subarr-subgen:latest, :cpu-<sha7>
+#                gpu -> docker/Dockerfile (upstream's CUDA base)
+#                       ghcr.io/<owner>/subarr-subgen:gpu, :gpu-<sha7>
 #
 # upstream's release.yml (tag-triggered, coaxk image names) is left untouched
 # so the patch stack stays easy to rebase onto new subarr-subgen releases.
@@ -17,7 +17,7 @@ name: fork-image
 
 on:
   push:
-    branches: [main, gpu]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -69,9 +69,13 @@ jobs:
           python scripts/parakeet-smoke.py /tmp/models /tmp/jfk.wav
 
   image:
-    name: build + push image
+    name: build + push ${{ matrix.variant }} image
     needs: smoke
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [cpu, gpu]
     permissions:
       contents: read
       packages: write
@@ -91,11 +95,11 @@ jobs:
           OWNER: ${{ github.repository_owner }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
-          BRANCH: ${{ github.ref_name }}
+          VARIANT: ${{ matrix.variant }}
         run: |
           owner="$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')"
           image="ghcr.io/${owner}/subarr-subgen"
-          if [[ "$BRANCH" == "gpu" ]]; then
+          if [[ "$VARIANT" == "gpu" ]]; then
             variant=gpu; dockerfile=docker/Dockerfile; moving_tag=gpu
           else
             variant=cpu; dockerfile=docker/Dockerfile.cpu; moving_tag=latest

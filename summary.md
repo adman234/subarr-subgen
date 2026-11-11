@@ -99,13 +99,13 @@ Home Assistant: Wyoming Protocol integration, host = Unraid IP, port 10301.
 The user forked it on GitHub; Claude can't create repos or forks from the
 session.
 
-| Branch | Image | Dockerfile | Notes |
+| Variant | Image | Dockerfile | Notes |
 |---|---|---|---|
-| `main` | `ghcr.io/adman234/subarr-subgen:latest` (+ `:cpu-<sha7>`) | `docker/Dockerfile.cpu` (ubuntu:22.04, CPU torch 2.13.0 / torchaudio 2.11.0) | lean, no CUDA. **This is the one in use.** |
-| `gpu` | `ghcr.io/adman234/subarr-subgen:gpu` (+ `:gpu-<sha7>`) | `docker/Dockerfile` (upstream's CUDA 12.9 base, cu129 torch) | Whisper detection/fallback on the GPU; Parakeet still on CPU |
+| CPU | `ghcr.io/adman234/subarr-subgen:latest` (+ `:cpu-<sha7>`) | `docker/Dockerfile.cpu` (ubuntu:22.04, CPU torch 2.13.0 / torchaudio 2.11.0) | lean, no CUDA. **This is the one in use.** |
+| GPU | `ghcr.io/adman234/subarr-subgen:gpu` (+ `:gpu-<sha7>`) | `docker/Dockerfile` (upstream's CUDA 12.9 base, cu129 torch) | Whisper detection/fallback on the GPU; Parakeet still on CPU |
 
-`docker/Dockerfile` (CUDA) stays unchanged on `main` too, so upstream merges
-stay clean; only the `gpu` branch builds it. The GHCR package was set to
+`docker/Dockerfile` (CUDA) stays unchanged so upstream merges stay clean.
+Both images build from `main` on every push (there is no `gpu` branch any more). The GHCR package was set to
 **Public** so Unraid can pull without credentials.
 
 ### What the fork adds (patches after upstream's numbers)
@@ -199,11 +199,11 @@ rm -f /var/lib/docker/unraid/images/subarr-subgen-parakeet-icon.png
   - ~10 min after the queue empties: `Parakeet backend: models unloaded`
 
 ### CI / build
-- **`fork-image.yml`** runs on push to `main` or `gpu`, and on manual dispatch:
+- **`fork-image.yml`** runs on push to `main` and on manual dispatch:
   - **smoke job:** apply patches → validate → pytest → real-model smoke test.
     It downloads Parakeet int8 + Whisper tiny and transcribes JFK; the first
     real run took 12 s including download.
-  - **image job:** build and push to GHCR with a per-variant registry
+  - **image job:** a cpu + gpu matrix; builds and pushes both to GHCR with a per-variant registry
     cache (`:buildcache-cpu` / `:buildcache-gpu`).
 - **Upstream's workflows** (`PR`, `security`, `codeql`, …) also run on the
   fork. `release.yml` only runs on tags and still names coaxk images; it's
@@ -218,12 +218,9 @@ rm -f /var/lib/docker/unraid/images/subarr-subgen-parakeet-icon.png
 
 ## Notes for continuing
 
-1. **The `gpu` branch is 2 commits behind `main`.** `main` is at `6a4a941`,
-   `gpu` at `545be3e`. The `:gpu` image therefore **lacks the 0065
-   UnsortedException fix and the 0066 memory bounds**. Fix:
-   `git push origin origin/main:refs/heads/gpu` (fast-forward), which rebuilds
-   `:gpu`. Keep `gpu` == `main` going forward; the workflow picks the
-   Dockerfile from the branch name.
+1. **One branch.** The old `gpu` branch kept falling behind `main`, so it was
+   retired on 2026-11-11: `fork-image.yml` now builds `:latest` (CPU) and
+   `:gpu` from every `main` push.
 2. **Merging a new upstream subarr-subgen release:**
    - fetch `coaxk/subarr-subgen`, then merge into `main`;
    - renumber the Parakeet patches (0064-0066) past upstream's newest number,
@@ -231,7 +228,7 @@ rm -f /var/lib/docker/unraid/images/subarr-subgen-parakeet-icon.png
    - re-run apply / validate / pytest;
    - update `scripts/parakeet-smoke.py` and the test path references if they
      name the patch;
-   - push `main`, then fast-forward `gpu`.
+   - push `main` (both images rebuild).
    - If upstream changes torch/torchaudio versions, base image or the layer
      order in `docker/Dockerfile`, **mirror it in `docker/Dockerfile.cpu`**:
      same pins, `/whl/cpu` index, `+cpu` asserts.
