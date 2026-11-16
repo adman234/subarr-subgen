@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: subarr-subgen <subarr@localhost>
 Date: Sun, 8 Nov 2026 22:00:52 +0000
-Subject: [PATCH] 0067: name translated subtitles after the job's own task
+Subject: [PATCH] 0069: name translated subtitles after the job's own task
 
 Patch 0015 lets POST /batch set the task (transcribe|translate) per request,
 but define_subtitle_language_naming() still switched the output name to
@@ -30,7 +30,7 @@ index 1ade45e..b839600 100644
              write_lrc(result, subtitle_file_path)
          else:
 -            subtitle_file_path = name_subtitle(file_path, output_language)
-+            # [PATCH 0067] name the file after THIS job's task, not the global
++            # [PATCH 0069] name the file after THIS job's task, not the global
 +            # TRANSCRIBE_OR_TRANSLATE. result.language is the SOURCE language even in
 +            # translate mode, so a per-request translate (patch 0015) on a
 +            # transcribe-default instance wrote English text into "<stem>.ko.srt".
@@ -40,7 +40,7 @@ index 1ade45e..b839600 100644
 +
          # Trigger the downstream webhook
 -        send_completion_webhook(file_path, subtitle_file_path, output_language, transcription_type)
-+        # [PATCH 0067] report the language the subtitle is WRITTEN in: English for a translate.
++        # [PATCH 0069] report the language the subtitle is WRITTEN in: English for a translate.
 +        written_language = LanguageCode.ENGLISH if transcription_type == 'translate' else output_language
 +        send_completion_webhook(file_path, subtitle_file_path, written_language, transcription_type)
  
@@ -58,7 +58,7 @@ index 1ade45e..b839600 100644
      Args:
          language (LanguageCode): The language code object containing methods to get different formats of the language name.
          type (str): The type of naming format desired, such as 'ISO_639_1', 'ISO_639_2_T', 'ISO_639_2_B', 'NAME', or 'NATIVE'.
-+        task (str | None): [PATCH 0067] the job's own task ('transcribe' / 'translate'); None = the global setting.
++        task (str | None): [PATCH 0069] the job's own task ('transcribe' / 'translate'); None = the global setting.
  
      Returns:
          str: The language name in the specified format. If an invalid type is provided, it defaults to the language's name.
@@ -67,7 +67,7 @@ index 1ade45e..b839600 100644
      # captured against whatever `language` refers to at construction time. Rebinding
      # `language` afterwards would leave them pointing at the original language.
 -    if transcribe_or_translate == 'translate':
-+    # [PATCH 0067] the job's own task wins over the global (per-request task, patch 0015).
++    # [PATCH 0069] the job's own task wins over the global (per-request task, patch 0015).
 +    if (task or transcribe_or_translate) == 'translate':
          language = LanguageCode.ENGLISH
      switch_dict = {
@@ -84,7 +84,7 @@ index 1ade45e..b839600 100644
      Args: 
          file_path: The path to the source file.
          language: The language of the subtitle.
-+        task: [PATCH 0067] the job's task ('transcribe' / 'translate'); None = the global setting.
++        task: [PATCH 0069] the job's task ('transcribe' / 'translate'); None = the global setting.
      
      Returns:
          The name of the subtitle file to be written.

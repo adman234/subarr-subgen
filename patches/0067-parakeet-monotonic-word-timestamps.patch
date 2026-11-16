@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: adman234 fork <noreply@github.com>
 Date: Wed, 04 Nov 2026 12:00:00 +0000
-Subject: [PATCH] 0065: Parakeet: force monotonic word/segment timestamps
+Subject: [PATCH] 0067: Parakeet: force monotonic word/segment timestamps
 
 The TDT decoder can stamp several tokens with the same frame (seen in a
 repetition loop: "little bit of a little bit" all at 579.90s). The minimum

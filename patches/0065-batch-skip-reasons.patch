@@ -1,0 +1,217 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: subarr-subgen <subarr@localhost>
+Date: Fri, 13 Nov 2026 23:36:16 +1100
+Subject: [PATCH] 0065: report which skip rule fired in /batch skip_reasons
+
+/batch returned one `skipped` count, so subarr could not tell "a
+target-language subtitle is EMBEDDED in the file" (nothing to do) from
+"the audio is a language this subgen skips" (worth a look). Every skip
+landed in subarr's Issues bucket as "reason not in /batch response",
+including a file carrying three full English tracks (coaxk/subarr#669).
+
+should_skip_file now records its reason in a ContextVar through
+_skip_because(<reason>) at every skip branch, from the SKIP_REASONS
+vocabulary. Check 4 says whether the target-language copy it found is
+embedded (internal_sub) or a sidecar (external_sub); embedded wins when
+both exist, since it is the one a user cannot see by listing the folder.
+subtitle_exists_in_language passes that along so the container is not
+probed twice.
+
+transcribe_existing adds `skip_reasons` ({reason: count}, summing to
+`skipped`) to the /batch reply. A skip that recorded no reason counts as
+"unknown", and the reason is cleared after every tally so a later file
+never inherits an earlier file's rule.
+
+A ContextVar, not a global, so concurrent webhook and /batch calls on
+different threads cannot read each other's reason. should_skip_file still
+returns a bool, so every other caller is unchanged. The new key is
+additive: subarr treats its absence as an older subgen.
+---
+ subgen.py | 72 ++++++++++++++++++++++++++++++++++++++++++++++---------
+ 1 file changed, 61 insertions(+), 11 deletions(-)
+
+diff --git a/subgen.py b/subgen.py
+index dfecd01..bb83205 100644
+--- a/subgen.py
++++ b/subgen.py
+@@ -48,6 +48,7 @@ transition period. The old names may be deprecated in future versions.
+ 
+ import ast
+ import asyncio
++import contextvars
+ import ctypes
+ from contextlib import contextmanager
+ import ctypes.util
+@@ -2955,6 +2956,44 @@ def gen_subtitles_queue(file_path: str, transcription_type: str, force_language:
+     task_queue.put(task)
+     return "queued"
+ 
++# [v4.40 PATCH #669] Which should_skip_file rule fired. /batch used to return one
++# `skipped` count, so subarr could not tell "an English sub is embedded in the
++# file" (nothing to do) from "the audio is a language this subgen skips" (worth
++# a look), and filed every skip as an unexplained issue. should_skip_file now
++# records its reason here and transcribe_existing tallies it into
++# `skip_reasons`. A ContextVar, not a global, so concurrent webhook and /batch
++# calls on different threads cannot read each other's reason. The bool return
++# is unchanged, so every other caller is unaffected.
++SKIP_REASONS = frozenset({
++    "lrc_exists",                 # 1: audio file with an .lrc beside it
++    "unknown_language",           # 2: audio language unknown + SKIP_UNKNOWN_LANGUAGE
++    "unknown_language_has_subs",  # 2: audio language unknown, file has internal subs
++    "no_preferred_audio",         # 3a: LIMIT_TO_PREFERRED_AUDIO_LANGUAGE, no match
++    "audio_lang",                 # 3b: audio language in SKIP_IF_AUDIO_LANGUAGES
++    "internal_sub",               # 4: target-language sub EMBEDDED in the file
++    "external_sub",               # 4: target-language sidecar on disk
++    "named_sub",                  # 4b/6: sidecar named by SUBTITLE_LANGUAGE_NAME
++    "output_exists",              # 4c: the file subgen would write already exists
++    "internal_sub_configured",    # 5a: SKIP_IF_INTERNAL_SUBTITLES_LANGUAGE embedded
++    "skip_sub_language",          # 5b: embedded sub language in SKIP_SUBTITLE_LANGUAGES
++})
++_skip_reason: contextvars.ContextVar = contextvars.ContextVar("subgen_skip_reason", default=None)
++# Set by subtitle_exists_in_language so check 4 can say WHICH copy it found
++# without probing the container a second time.
++_target_sub_internal: contextvars.ContextVar = contextvars.ContextVar("subgen_target_sub_internal", default=False)
++
++
++def current_skip_reason():
++    """The reason the last should_skip_file call in this context skipped, or
++    None when it did not skip."""
++    return _skip_reason.get()
++
++
++def _skip_because(reason: str) -> bool:
++    _skip_reason.set(reason)
++    return True
++
++
+ def should_skip_file(file_path: str, target_language: LanguageCode, audio_langs=None,
+                      ignore_forced_override: bool | None = None,
+                      bypass_skip: bool = False) -> bool:
+@@ -2971,6 +3010,7 @@ def should_skip_file(file_path: str, target_language: LanguageCode, audio_langs=
+     """
+     base_name = os.path.basename(file_path)
+     file_name, file_ext = os.path.splitext(base_name)
++    _skip_reason.set(None)  # [v4.40 PATCH #669] no stale reason from a previous call
+ 
+     # [v4.23 PATCH] Per-request escape hatch. EVERY check in this function is a
+     # coverage or policy heuristic -- "the audio is a language we skip", "a
+@@ -3003,16 +3043,16 @@ def should_skip_file(file_path: str, target_language: LanguageCode, audio_langs=
+         lrc_path = os.path.join(os.path.dirname(file_path), f"{file_name}.lrc")
+         if os.path.exists(lrc_path):
+             logging.info(f"Skipping {base_name}: LRC file already exists.")
+-            return True
++            return _skip_because("lrc_exists")
+ 
+     # 2. Audio language is unknown — two independent skip conditions for this case.
+     if target_language == LanguageCode.NONE:
+         if skip_unknown_language:
+             logging.info(f"Skipping {base_name}: Audio language unknown and SKIP_UNKNOWN_LANGUAGE is enabled.")
+-            return True
++            return _skip_because("unknown_language")
+         if skip_if_no_audio_language_but_subtitles_exist and get_subtitle_languages(file_path):
+             logging.info(f"Skipping {base_name}: Audio language unknown but internal subtitles already exist.")
+-            return True
++            return _skip_because("unknown_language_has_subs")
+ 
+     # 3. Audio track checks (cheap — audio_langs pre-fetched by caller).
+     if audio_langs is None:
+@@ -3023,12 +3063,12 @@ def should_skip_file(file_path: str, target_language: LanguageCode, audio_langs=
+         if not any(lang in preferred_audio_languages for lang in audio_langs):
+             preferred_names = [lang.to_name() for lang in preferred_audio_languages]
+             logging.info(f"Skipping {base_name}: No preferred audio tracks found (looking for {', '.join(preferred_names)})")
+-            return True
++            return _skip_because("no_preferred_audio")
+ 
+     # 3b. Skip if audio language is in the explicit skip list.
+     if any(lang in skip_audio_languages for lang in audio_langs):
+         logging.info(f"Skipping {base_name}: Contains a skipped audio language.")
+-        return True
++        return _skip_because("audio_lang")
+ 
+     # 4. Skip if a subtitle already exists in the target language.
+     if skip_if_target_subtitle_exists:
+@@ -3044,20 +3084,20 @@ def should_skip_file(file_path: str, target_language: LanguageCode, audio_langs=
+                 else:
+                     lang_name = target_language.to_name()
+                     logging.info(f"Skipping {base_name}: Subtitles already exist in {lang_name}.")
+-                return True
++                return _skip_because("internal_sub" if _target_sub_internal.get() else "external_sub")
+ 
+         # Since SUBTITLE_LANGUAGE_NAME overrides the output filename, check if it exists in the folder.
+         if named_output_configured:
+             external_lang = LanguageCode.from_string(subtitle_language_name)
+             if has_external_subtitle_in_language(file_path, external_lang, recursion=True, only_match_subgen_subtitles=only_match_subgen_subtitles):
+                 logging.info(f"Skipping {base_name}: Subtitles already exist in custom name '{subtitle_language_name}'.")
+-                return True
++                return _skip_because("named_sub")
+ 
+         # Check: Does the exact file Subgen intends to create already exist?
+         expected_output = name_subtitle(file_path, target_language)
+         if os.path.exists(expected_output):
+             logging.info(f"Skipping {base_name}: Generated subtitle '{os.path.basename(expected_output)}' already exists.")
+-            return True
++            return _skip_because("output_exists")
+ 
+     # 5. Internal subtitle checks (grouped — both examine streams inside the container).
+ 
+@@ -3065,12 +3105,12 @@ def should_skip_file(file_path: str, target_language: LanguageCode, audio_langs=
+     if skip_if_internal_sub_language and has_internal_subtitle_in_language(file_path, skip_if_internal_sub_language):
+         lang_name = skip_if_internal_sub_language.to_name()
+         logging.info(f"Skipping {base_name}: Internal subtitles in {lang_name} already exist.")
+-        return True
++        return _skip_because("internal_sub_configured")
+ 
+     # 5b. Skip if any embedded subtitle language is in the skip list.
+     if skip_subtitle_languages and any(lang in skip_subtitle_languages for lang in get_subtitle_languages(file_path)):
+         logging.info(f"Skipping {base_name}: Contains a skipped subtitle language.")
+-        return True
++        return _skip_because("skip_sub_language")
+ 
+     # 6. Skip if an external subtitle exists matching the custom subtitle_language_name.
+     #    Note: this overlaps with check 4b when skip_if_target_subtitle_exists is also True;
+@@ -3080,7 +3120,7 @@ def should_skip_file(file_path: str, target_language: LanguageCode, audio_langs=
+         if has_external_subtitle_in_language(file_path, external_lang, recursion=True, only_match_subgen_subtitles=only_match_subgen_subtitles):
+             lang_name = external_lang.to_name()
+             logging.info(f"Skipping {base_name}: External subtitles in {lang_name} already exist.")
+-            return True
++            return _skip_because("named_sub")
+ 
+     return False
+     
+@@ -3142,6 +3182,9 @@ def subtitle_exists_in_language(video_file, target_language: LanguageCode, ignor
+     # sidecar check too, or a caller can bypass forced-exclusion for embedded
+     # tracks and silently not for external ones.
+     external = has_external_subtitle_in_language(video_file, target_language, recursion=True, only_match_subgen_subtitles=only_match_subgen_subtitles, ignore_forced_override=ignore_forced_override)
++    # [v4.40 PATCH #669] tell should_skip_file which copy matched. Embedded wins
++    # when both exist: it is the one a user cannot see by listing the folder.
++    _target_sub_internal.set(bool(internal))
+     return internal or external
+ 
+ def has_internal_subtitle_in_language(video_file: str, target_language: LanguageCode, ignore_forced_override: bool | None = None) -> bool:
+@@ -3681,6 +3724,9 @@ def transcribe_existing(transcribe_folders, forceLanguage : LanguageCode | None
+         "already_in_queue": 0,
+         "no_audio": 0,
+         "pending_language_detect": 0,
++        # [v4.40 PATCH #669] {reason: count}, summing to "skipped". Reasons are
++        # SKIP_REASONS; a skip whose branch recorded none counts as "unknown".
++        "skip_reasons": {},
+     }
+ 
+     def _tally(_result):
+@@ -3688,12 +3734,16 @@ def transcribe_existing(transcribe_folders, forceLanguage : LanguageCode | None
+             counts["queued"] += 1
+         elif _result == "skipped":
+             counts["skipped"] += 1
++            _why = _skip_reason.get() or "unknown"
++            counts["skip_reasons"][_why] = counts["skip_reasons"].get(_why, 0) + 1
+         elif _result == "already_active":
+             counts["already_in_queue"] += 1
+         elif _result == "no_audio":
+             counts["no_audio"] += 1
+         elif _result == "detect_pending":
+             counts["pending_language_detect"] += 1
++        # Consumed: a later result must never be blamed on this file's rule.
++        _skip_reason.set(None)
+ 
+     # [v4 PATCH] Collect files first, then sort with optional reverse
+     file_list = []
