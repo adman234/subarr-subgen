@@ -67,7 +67,8 @@
 0062-advertise-track-choice.patch
 0063-bump-patch-rev-v4.38.patch
 0064-parakeet-backend.patch
-0065-parakeet-monotonic-word-timestamps.patch
-0066-parakeet-bound-onnx-memory.patch
-0067-per-request-task-subtitle-naming.patch
-0068-bump-patch-rev-v4.39.patch
+0065-batch-skip-reasons.patch
+0067-parakeet-monotonic-word-timestamps.patch
+0068-parakeet-bound-onnx-memory.patch
+0069-per-request-task-subtitle-naming.patch
+0070-bump-patch-rev-v4.40.patch
