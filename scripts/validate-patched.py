@@ -208,6 +208,38 @@ def validate_failed_load_release(tree) -> None:
     ok("patch 0058 (#77 failed loads release the CUDA pool, both load sites)")
 
 
+def validate_skip_reasons(tree) -> None:
+    """Patch 0065 (subarr#669): every should_skip_file skip records WHY.
+
+    /batch reports skip_reasons so subarr can tell an embedded-subtitle skip
+    (benign) from an audio-language skip. A branch that returns a bare True
+    skips without a reason and subarr files it as "unknown" again. Upstream
+    adds skip rules over time, so this gate makes a re-port that brings in a
+    new bare `return True` fail loudly instead of silently degrading.
+    """
+    fn = next(
+        (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "should_skip_file"),
+        None,
+    )
+    if fn is None:
+        fail("should_skip_file() not found - patch 0065")
+    bare = [
+        n.lineno
+        for n in ast.walk(fn)
+        if isinstance(n, ast.Return) and isinstance(n.value, ast.Constant) and n.value.value is True
+    ]
+    if bare:
+        fail(f"should_skip_file() has a bare `return True` at line(s) {bare}: tag it with _skip_because(<reason>) - patch 0065")
+    tagged = [
+        n
+        for n in ast.walk(fn)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "_skip_because"
+    ]
+    if len(tagged) < 11:
+        fail(f"should_skip_file() tags only {len(tagged)} skip branches, expected at least 11 - patch 0065")
+    ok(f"patch 0065 (#669 every should_skip_file skip carries a reason, {len(tagged)} branches)")
+
+
 def main() -> int:
     if not TARGET.is_file():
         fail(f"{TARGET} not found — did you run apply-patches.sh?")
@@ -349,8 +381,8 @@ def main() -> int:
         # whenever a new bump patch is added (0030 -> v4.17 went stale when 0032
         # landed v4.18, and this check failed silently behind an apply failure).
         (
-            "subarr_subgen_patch_rev = 'v4.39'",
-            "patch 0064 (patch_rev bump v4.39, latest)",
+            "subarr_subgen_patch_rev = 'v4.40'",
+            "patch 0066 (patch_rev bump v4.40, latest)",
         ),
         # --- patch 0054 (#69: direct-task claim) ------------------------------
         # perform_model_cleanup() reads "is the system idle" and then unloads
@@ -442,6 +474,16 @@ def main() -> int:
             "only_match_subgen_subtitles=only_match_subgen_subtitles, ignore_forced_override=ignore_forced_override",
             "patch 0041 (#483 override reaches the external check)",
         ),
+        # patch 0065 (subarr#669). /batch carries the per-reason breakdown, and
+        # check 4 says which copy (embedded or sidecar) matched.
+        (
+            '"skip_reasons": {},',
+            "patch 0065 (#669 /batch reports skip_reasons)",
+        ),
+        (
+            "_target_sub_internal.set(bool(internal))",
+            "patch 0065 (#669 check 4 names embedded vs sidecar)",
+        ),
     ]
     for needle, label in text_checks:
         if needle not in code:
@@ -450,6 +492,7 @@ def main() -> int:
 
     validate_launcher()
     validate_failed_load_release(tree)
+    validate_skip_reasons(tree)
 
     print()
     print("VALIDATE: all gates passed.")
